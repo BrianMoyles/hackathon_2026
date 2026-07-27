@@ -1,0 +1,207 @@
+# Compatibility Lab Jira Board
+
+Use this as the hackathon board until the work is moved into Jira. Keep each card small enough that one person can finish it without blocking the other stream.
+
+## Sprint Goal
+
+Deliver an offline CLI that scans both repos, joins provider exporter metadata with MRMO readiness metadata, and produces a clear compatibility report for at least one ready resource, one warning resource, and one blocked resource.
+
+## MRMO Developer Board
+
+### MRMO-1: Parse MRMO Resource Registry
+
+- Owner: `MRMO`
+- Priority: `P0`
+- Status: `Todo`
+- Files: `internal/scanner/mrmo/scanner.go`, MRMO `internal/resourcetypes/registry.go`
+- Goal: Extract `resourceTypeRef`, Terraform type, domain, and tier source.
+- Acceptance: Scanner emits all MRMO registry entries with stable refs and Terraform types.
+
+### MRMO-2: Parse Topics YAML
+
+- Owner: `MRMO`
+- Priority: `P0`
+- Status: `Todo`
+- Files: `internal/scanner/mrmo/scanner.go`, MRMO `config/topics.yaml`
+- Goal: Extract topic, handler, handlerMap entries, Avro schema path, supported types, validation, and `resourceTypeRef`.
+- Acceptance: Scanner maps each resource ref to its topic and handler wiring.
+
+### MRMO-3: Parse Resource Hierarchy
+
+- Owner: `MRMO`
+- Priority: `P0`
+- Status: `Todo`
+- Files: `internal/scanner/mrmo/scanner.go`, MRMO `config/resource-hierarchy.yml`
+- Goal: Extract reconciliation tier for each Terraform resource type.
+- Acceptance: Missing hierarchy tier becomes `MRMO_HIERARCHY_TIER_MISSING`.
+
+### MRMO-4: Detect Handler Factory Coverage
+
+- Owner: `MRMO`
+- Priority: `P0`
+- Status: `Todo`
+- Files: `internal/scanner/mrmo/scanner.go`, MRMO `internal/handlers/`
+- Goal: Scan `RegisterHandlerFactory` calls and map handler names to files.
+- Acceptance: Topic handler names without a factory become `MRMO_HANDLER_FACTORY_MISSING`.
+
+### MRMO-5: Detect Integration Test Coverage
+
+- Owner: `MRMO`
+- Priority: `P1`
+- Status: `Todo`
+- Files: `internal/scanner/mrmo/scanner.go`, MRMO `internal/integration/tests/handlers_test.go`
+- Goal: Identify whether each MRMO-supported resource has handler pipeline test coverage.
+- Acceptance: Missing or uncertain coverage appears as a warning, not a blocker.
+
+### MRMO-6: Reconciliation Eligibility Check
+
+- Owner: `MRMO`
+- Priority: `P0`
+- Status: `Todo`
+- Files: `internal/scanner/mrmo/scanner.go`
+- Goal: Mark a resource eligible only when it is topic-wired and present in the hierarchy.
+- Acceptance: `explain <resource>` shows whether reconciliation will include the resource.
+
+## CX as Code Developer Board
+
+### CX-1: Provider Resource Catalog
+
+- Owner: `CX`
+- Priority: `P0`
+- Status: `Todo`
+- Files: `internal/scanner/provider/scanner.go`, provider `provider_registrar.go`
+- Goal: Extract provider resource, data source, and exporter registration status.
+- Acceptance: Scanner distinguishes `hasResource`, `hasDataSource`, and `hasExporter`.
+
+### CX-2: Exporter Metadata Snapshot
+
+- Owner: `CX`
+- Priority: `P0`
+- Status: `Todo`
+- Files: `internal/scanner/provider/scanner.go`, provider `resource_exporter.go`
+- Goal: Emit `RefAttrs`, `ExcludedAttributes`, singleton flags, `ExportId`, file-output fields, and custom resolver presence.
+- Acceptance: `genesyscloud_routing_queue` and `genesyscloud_routing_utilization` show meaningful exporter metadata.
+
+### CX-3: RefAttr Dependency Graph
+
+- Owner: `CX`
+- Priority: `P0`
+- Status: `Todo`
+- Files: `internal/scanner/provider/scanner.go`
+- Goal: Convert provider `RefAttrs` and `EncodedRefAttrs` into dependency edges.
+- Acceptance: `dependency-closure genesyscloud_routing_queue` shows direct dependencies and their readiness.
+
+### CX-4: Singleton Safety Validation
+
+- Owner: `CX`
+- Priority: `P0`
+- Status: `Todo`
+- Files: `internal/scanner/provider/scanner.go`
+- Goal: Check `IsSingleton` resources always have an `ExportId`.
+- Acceptance: Missing singleton export IDs become `PROVIDER_SINGLETON_EXPORT_ID_MISSING`.
+
+### CX-5: File Output Metadata
+
+- Owner: `CX`
+- Priority: `P1`
+- Status: `Todo`
+- Files: `internal/scanner/provider/scanner.go`
+- Goal: Detect `ThirdPartyRefAttrs` and `CustomFileWriter.SubDirectory` for resources that write files.
+- Acceptance: Flow/user-prompt style resources show output-file behavior in `explain`.
+
+### CX-6: BlockHash And BlockLabel Hints
+
+- Owner: `CX`
+- Priority: `P2`
+- Status: `Todo`
+- Files: `internal/scanner/provider/scanner.go`
+- Goal: Static-scan `QuickHashFields` and ResourceMeta label creation where practical.
+- Acceptance: Unknown BlockHash remains explicit instead of hidden.
+
+## Shared Board
+
+### LAB-1: Replace Sample Data With Real Scanner Output
+
+- Owner: `Shared`
+- Priority: `P0`
+- Status: `Todo`
+- Files: `internal/scanner/mrmo/scanner.go`, `internal/scanner/provider/scanner.go`
+- Goal: Remove the hardcoded `routing-queue` sample once both scanners return real manifests.
+- Acceptance: `make scan` reports actual local repo data.
+
+### LAB-2: Improve Matrix Scoring
+
+- Owner: `Shared`
+- Priority: `P0`
+- Status: `Todo`
+- Files: `internal/matrix/matrix.go`
+- Goal: Convert provider and MRMO signals into `ready`, `warning`, `blocked`, or `unknown`.
+- Acceptance: Blockers fail `--strict`; warnings remain report-only.
+
+### LAB-3: JSON Report Contract
+
+- Owner: `Shared`
+- Priority: `P0`
+- Status: `Todo`
+- Files: `internal/model/model.go`, `internal/matrix/matrix.go`
+- Goal: Finalize the compatibility report schema for CI and PR comments.
+- Acceptance: JSON output is stable enough for golden tests.
+
+### LAB-4: Markdown Report Output
+
+- Owner: `Shared`
+- Priority: `P1`
+- Status: `Todo`
+- Files: `internal/report/report.go`
+- Goal: Add markdown output grouped by blockers, warnings, and ready resources.
+- Acceptance: `scan --format markdown` produces PR-friendly output.
+
+### LAB-5: Golden Fixture Tests
+
+- Owner: `Shared`
+- Priority: `P1`
+- Status: `Todo`
+- Files: `testdata/fixtures/`, scanner tests, matrix tests
+- Goal: Add small fixture snapshots for MRMO and provider metadata.
+- Acceptance: `go test ./...` catches scanner and report regressions.
+
+### LAB-6: Demo Scenarios
+
+- Owner: `Shared`
+- Priority: `P0`
+- Status: `Todo`
+- Files: `README.md`, `testdata/fixtures/`
+- Goal: Prepare three demo resources: ready, warning, and blocked.
+- Acceptance: Demo can be run offline from a clean checkout.
+
+### LAB-7: Provider PR Diff
+
+- Owner: `Shared`
+- Priority: `P2`
+- Status: `Todo`
+- Files: `cmd/compatibility-lab/main.go`, `internal/matrix/`
+- Goal: Compare provider metadata snapshots across git refs.
+- Acceptance: Removed exporter or changed `RefAttrs` on an MRMO-supported resource is flagged as high risk.
+
+### LAB-8: Roundtrip Prototype
+
+- Owner: `Shared`
+- Priority: `P2`
+- Status: `Todo`
+- Files: new `internal/roundtrip/`
+- Goal: Prototype mocked export/source-target drift comparison.
+- Acceptance: Roundtrip can compare two exported JSON fixtures and show normalized drift.
+
+## Suggested First Pulls
+
+- MRMO dev starts with `MRMO-1`, `MRMO-2`, and `MRMO-4`.
+- CX dev starts with `CX-1`, `CX-2`, and `CX-3`.
+- Shared pairing starts after both scanners can emit at least one real resource.
+
+## Done For Scaffold
+
+- `cmd/compatibility-lab/main.go` exists with planned commands.
+- `internal/model` contains initial report structs.
+- `internal/scanner/mrmo` and `internal/scanner/provider` exist as implementation slots.
+- `internal/matrix` joins sample scanner output.
+- `internal/report` prints table, explain, and dependency output.
