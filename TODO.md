@@ -68,10 +68,11 @@ Deliver an offline CLI that scans both repos, joins provider exporter metadata w
 
 - Owner: `CX`
 - Priority: `P0`
-- Status: `Todo`
+- Status: `Done`
 - Files: `internal/scanner/provider/scanner.go`, provider `provider_registrar.go`
 - Goal: Extract provider resource, data source, and exporter registration status.
 - Acceptance: Scanner distinguishes `hasResource`, `hasDataSource`, and `hasExporter`.
+- Notes: Static AST walk of `<repo>/genesyscloud/**/*.go` (test files skipped). Collects `RegisterResource` / `RegisterDataSource` / `RegisterExporter` call sites; first argument resolved from string literal or package-local `const`/`var`. Cross-package qualified selectors are skipped for now (safe default until CX-2 needs them). Unit-tested via a synthetic mini-provider tree so behavior is locked without a live checkout.
 
 ### CX-2: Exporter Metadata Snapshot
 
