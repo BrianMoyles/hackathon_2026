@@ -1,25 +1,36 @@
 // Package provider scans a checkout of terraform-provider-genesyscloud and
-// produces a manifest describing which Terraform types have a provider
-// resource, data source, and exporter registered.
-//
-// CX-1 scope: extract registration status only. RefAttrs, singleton metadata,
-// file-output metadata, and custom resolvers are populated by later tasks
-// (CX-2 onwards).
+// produces a manifest describing each Terraform resource type discovered
+// through the provider's SetRegistrar / RegisterExporter conventions.
 //
 // The scanner is intentionally static and offline: it uses go/parser to walk
-// the AST of every non-test .go file under `<repoPath>/genesyscloud/` and
-// looks for method calls of the form:
+// the AST of every non-test .go file under `<repoPath>/genesyscloud/`. Two
+// kinds of information are extracted:
 //
-//	regInstance.RegisterResource(<resourceType>, ...)
-//	regInstance.RegisterDataSource(<resourceType>, ...)
-//	regInstance.RegisterExporter(<resourceType>, ...)
+//	CX-1 (registration status)
+//	  Method calls of the form:
+//	    regInstance.RegisterResource(<resourceType>, ...)
+//	    regInstance.RegisterDataSource(<resourceType>, ...)
+//	    regInstance.RegisterExporter(<resourceType>, <exporterFunc>())
+//	  produce HasResource / HasDataSource / HasExporter booleans per type.
 //
-// `<resourceType>` may be a string literal (e.g. "genesyscloud_routing_queue")
-// or an identifier that resolves to a string constant declared elsewhere in
-// the same package (e.g. `ResourceType`). Identifiers that cannot be resolved
-// against a package-local constant are skipped and surfaced back to the
-// caller as scanner warnings, so noisy resolution failures do not silently
-// drop registrations.
+//	CX-2 (exporter metadata snapshot)
+//	  For every RegisterExporter call, the scanner locates the exporter
+//	  function in the same package and pulls the following fields off its
+//	  returned `&<pkg>.ResourceExporter{...}` composite literal:
+//	    - RefAttrs (attribute -> RefType, AltValues)
+//	    - ExcludedAttributes
+//	    - IsSingleton and ExportId
+//	    - ThirdPartyRefAttrs
+//	    - CustomFileWriter.SubDirectory -> CustomFileDirectory
+//	    - CustomAttributeResolver presence -> HasCustomResolvers
+//
+// RefType selectors that reference other provider packages
+// (e.g. `authDivision.ResourceType`) are resolved by looking up the referring
+// file's imports and consulting that other package's collected string
+// constants. Anything that cannot be resolved statically is left as the empty
+// string so downstream tooling can decide how to handle unknowns. Everything
+// beyond this (EncodedRefAttrs, ResourceMeta.BlockHash, etc.) is left for
+// CX-3, CX-5, and CX-6 to fill in.
 package provider
 
 import (
@@ -36,6 +47,11 @@ import (
 
 	"compatibility-lab/internal/model"
 )
+
+// providerPathSegment is the sub-path that every provider package import
+// contains. It lets the scanner turn `github.com/.../genesyscloud/foo` into
+// `<repo>/genesyscloud/foo` without having to know the full module path.
+const providerPathSegment = "/genesyscloud/"
 
 // registerMethods enumerates the method names whose first argument identifies
 // a Terraform resource type registration.
@@ -54,7 +70,8 @@ const (
 )
 
 // Scan walks the provider repository and returns a manifest describing which
-// resources are registered as `Resource`, `DataSource`, and/or `Exporter`.
+// resources are registered as `Resource`, `DataSource`, and/or `Exporter`,
+// alongside the exporter metadata pulled from each `ResourceExporter` literal.
 func Scan(repoPath string) (model.ProviderManifest, error) {
 	if err := requireDirectory(repoPath); err != nil {
 		return model.ProviderManifest{}, err
@@ -72,8 +89,8 @@ func Scan(repoPath string) (model.ProviderManifest, error) {
 		return model.ProviderManifest{}, err
 	}
 
-	registrations := aggregateRegistrations(packages)
-	resources := buildProviderResources(registrations)
+	records := aggregateRegistrations(packages, genesyscloudRoot)
+	resources := buildProviderResources(records)
 
 	return model.ProviderManifest{
 		RepoPath:  repoPath,
@@ -81,39 +98,76 @@ func Scan(repoPath string) (model.ProviderManifest, error) {
 	}, nil
 }
 
-// packageInfo holds the AST-derived facts we care about for a single Go
-// package under `genesyscloud/`.
+// packageInfo captures every piece of AST-derived data we need from a single
+// Go package under `genesyscloud/`.
 type packageInfo struct {
 	dir string
 
+	// files keeps the parsed AST + per-file imports around so that we can
+	// resolve identifiers (e.g. RefType selectors) after all packages have
+	// been parsed.
+	files []*fileInfo
+
 	// stringConstants maps identifier name -> literal string value for any
-	// const or var declaration in the package that assigns a string literal.
-	// We treat const and var the same way because a few packages use `var
-	// ResourceType = "..."` instead of `const`.
+	// const or var declaration in the package that assigns a plain string
+	// literal. `const` and `var` are both accepted because a handful of
+	// provider packages use `var ResourceType = "..."`.
 	stringConstants map[string]string
 
-	// calls captures every RegisterResource/DataSource/Exporter call found in
-	// the package, tagged with the original expression used as the first arg
-	// so we can resolve identifiers after all files in the package are read.
+	// calls records every RegisterResource/DataSource/Exporter site seen in
+	// the package, along with which file owned it (needed later to resolve
+	// cross-package identifiers against that file's imports).
 	calls []registrationCall
+
+	// funcs indexes non-method function declarations by name so we can find
+	// the exporter function referenced from RegisterExporter(..., FooExporter()).
+	funcs map[string]*funcRef
+}
+
+type fileInfo struct {
+	path    string
+	imports map[string]string // alias -> full import path
+}
+
+type funcRef struct {
+	decl *ast.FuncDecl
+	file *fileInfo
 }
 
 type registrationCall struct {
-	kind      registrationKind
-	arg       ast.Expr
-	file      string
-	line      int
-	fileShort string
+	kind         registrationKind
+	arg          ast.Expr
+	exporterFunc string // populated when kind == kindExporter and the arg is <ident>()
+	file         *fileInfo
 }
 
-// registrationRecord is the resolved view of registrationCall entries for a
-// single Terraform type across all packages that touch it.
+// registrationRecord is the resolved, per-Terraform-type accumulator that
+// aggregateRegistrations produces. It carries just enough state to build a
+// model.ProviderResource.
 type registrationRecord struct {
 	terraformType string
 	hasResource   bool
 	hasDataSource bool
 	hasExporter   bool
+	exporter      *exporterInfo
 }
+
+// exporterInfo mirrors the subset of resourceExporter.ResourceExporter fields
+// that CX-2 and CX-3 promise to expose.
+type exporterInfo struct {
+	IsSingleton         bool
+	ExportID            string
+	RefAttrs            []model.RefAttr
+	EncodedRefAttrs     []model.EncodedRefAttr
+	ExcludedAttributes  []string
+	ThirdPartyRefAttrs  []string
+	CustomFileDirectory string
+	HasCustomResolvers  bool
+}
+
+// ---------------------------------------------------------------------------
+// Pass 1: parse every file, collect per-package facts
+// ---------------------------------------------------------------------------
 
 func loadPackages(root string) (map[string]*packageInfo, error) {
 	packages := map[string]*packageInfo{}
@@ -135,9 +189,6 @@ func loadPackages(root string) (map[string]*packageInfo, error) {
 
 		file, err := parser.ParseFile(fset, path, nil, parser.SkipObjectResolution)
 		if err != nil {
-			// A single unparseable file (rare) should not abort the whole
-			// scan, but we do want the caller to know so surfacing an error
-			// keeps the demo honest. Wrap with the offending path.
 			return fmt.Errorf("parse %s: %w", path, err)
 		}
 
@@ -147,12 +198,20 @@ func loadPackages(root string) (map[string]*packageInfo, error) {
 			pkg = &packageInfo{
 				dir:             dir,
 				stringConstants: map[string]string{},
+				funcs:           map[string]*funcRef{},
 			}
 			packages[dir] = pkg
 		}
 
+		fi := &fileInfo{
+			path:    path,
+			imports: collectImports(file),
+		}
+		pkg.files = append(pkg.files, fi)
+
 		collectStringConstants(file, pkg.stringConstants)
-		pkg.calls = append(pkg.calls, collectRegistrationCalls(file, fset, path)...)
+		pkg.calls = append(pkg.calls, collectRegistrationCalls(file, fi)...)
+		collectFuncDecls(file, fi, pkg.funcs)
 		return nil
 	})
 	if walkErr != nil {
@@ -161,9 +220,33 @@ func loadPackages(root string) (map[string]*packageInfo, error) {
 	return packages, nil
 }
 
+// collectImports resolves both aliased and un-aliased import specs to a map
+// from local alias -> full import path.
+func collectImports(file *ast.File) map[string]string {
+	imports := make(map[string]string, len(file.Imports))
+	for _, imp := range file.Imports {
+		importPath, err := strconv.Unquote(imp.Path.Value)
+		if err != nil {
+			continue
+		}
+		var alias string
+		switch {
+		case imp.Name != nil && imp.Name.Name != "_" && imp.Name.Name != ".":
+			alias = imp.Name.Name
+		default:
+			// Fall back to the last segment of the path. This matches the
+			// package's declared name for every provider package we care
+			// about (they follow Go's usual dir-name-equals-package-name
+			// convention).
+			alias = filepath.Base(importPath)
+		}
+		imports[alias] = importPath
+	}
+	return imports
+}
+
 // collectStringConstants records every top-level const or var declaration
-// whose value is a plain string literal. These are the only forms the scanner
-// can resolve statically; anything computed at runtime is ignored.
+// whose value is a plain string literal. Computed values are ignored.
 func collectStringConstants(file *ast.File, out map[string]string) {
 	for _, decl := range file.Decls {
 		genDecl, ok := decl.(*ast.GenDecl)
@@ -182,26 +265,35 @@ func collectStringConstants(file *ast.File, out map[string]string) {
 				if i >= len(valueSpec.Values) {
 					continue
 				}
-				literal, ok := valueSpec.Values[i].(*ast.BasicLit)
-				if !ok || literal.Kind != token.STRING {
-					continue
+				if value, ok := stringLiteralValue(valueSpec.Values[i]); ok {
+					out[name.Name] = value
 				}
-				value, err := strconv.Unquote(literal.Value)
-				if err != nil {
-					continue
-				}
-				out[name.Name] = value
 			}
 		}
 	}
 }
 
+// collectFuncDecls indexes every top-level (non-method) function declaration
+// by name so the aggregation phase can locate exporter functions.
+func collectFuncDecls(file *ast.File, fi *fileInfo, out map[string]*funcRef) {
+	for _, decl := range file.Decls {
+		funcDecl, ok := decl.(*ast.FuncDecl)
+		if !ok {
+			continue
+		}
+		if funcDecl.Recv != nil {
+			continue
+		}
+		out[funcDecl.Name.Name] = &funcRef{decl: funcDecl, file: fi}
+	}
+}
+
 // collectRegistrationCalls walks the file looking for
 // `<X>.RegisterResource(<arg>, ...)` / `RegisterDataSource` / `RegisterExporter`
-// call sites.
-func collectRegistrationCalls(file *ast.File, fset *token.FileSet, path string) []registrationCall {
+// call sites. For RegisterExporter it also records the exporter function
+// name so the aggregation phase can find its definition.
+func collectRegistrationCalls(file *ast.File, fi *fileInfo) []registrationCall {
 	var out []registrationCall
-	shortPath := shortenPath(path)
 
 	ast.Inspect(file, func(n ast.Node) bool {
 		call, ok := n.(*ast.CallExpr)
@@ -219,25 +311,30 @@ func collectRegistrationCalls(file *ast.File, fset *token.FileSet, path string) 
 		if len(call.Args) == 0 {
 			return true
 		}
-		position := fset.Position(call.Pos())
-		out = append(out, registrationCall{
-			kind:      kind,
-			arg:       call.Args[0],
-			file:      path,
-			line:      position.Line,
-			fileShort: shortPath,
-		})
+
+		record := registrationCall{
+			kind: kind,
+			arg:  call.Args[0],
+			file: fi,
+		}
+		if kind == kindExporter && len(call.Args) >= 2 {
+			if innerCall, ok := call.Args[1].(*ast.CallExpr); ok {
+				if funcIdent, ok := innerCall.Fun.(*ast.Ident); ok {
+					record.exporterFunc = funcIdent.Name
+				}
+			}
+		}
+		out = append(out, record)
 		return true
 	})
 	return out
 }
 
-// aggregateRegistrations flattens the per-package information into a single
-// map keyed by Terraform type. Unresolvable identifiers (e.g. selectors that
-// reference another package's constant) are silently skipped for CX-1 because
-// the provider repo occasionally registers resources through indirection
-// that only makes sense to a full type checker.
-func aggregateRegistrations(packages map[string]*packageInfo) map[string]*registrationRecord {
+// ---------------------------------------------------------------------------
+// Pass 2: fold per-package facts into per-Terraform-type records
+// ---------------------------------------------------------------------------
+
+func aggregateRegistrations(packages map[string]*packageInfo, genesyscloudRoot string) map[string]*registrationRecord {
 	records := map[string]*registrationRecord{}
 	for _, pkg := range packages {
 		for _, call := range pkg.calls {
@@ -257,6 +354,9 @@ func aggregateRegistrations(packages map[string]*packageInfo) map[string]*regist
 				record.hasDataSource = true
 			case kindExporter:
 				record.hasExporter = true
+				if info, ok := extractExporterInfo(call, pkg, packages, genesyscloudRoot); ok {
+					record.exporter = info
+				}
 			}
 		}
 	}
@@ -267,41 +367,459 @@ func aggregateRegistrations(packages map[string]*packageInfo) map[string]*regist
 // concrete Terraform type string.
 //
 // Supported forms:
-//   - "genesyscloud_foo"                -> string literal
-//   - ResourceType                       -> package-local identifier
-//   - somePkg.ResourceType               -> qualified identifier (unresolvable
-//     here; skipped so the caller can decide how to handle it)
+//   - "genesyscloud_foo"     -> string literal
+//   - ResourceType           -> package-local identifier
+//   - somePkg.ResourceType   -> qualified identifier (skipped; not needed by
+//     any provider Register* site we've observed)
 func resolveResourceType(expr ast.Expr, constants map[string]string) (string, bool) {
 	switch node := expr.(type) {
 	case *ast.BasicLit:
-		if node.Kind != token.STRING {
-			return "", false
-		}
-		value, err := strconv.Unquote(node.Value)
-		if err != nil {
-			return "", false
-		}
-		return value, true
+		return stringLiteralValue(node)
 	case *ast.Ident:
 		value, ok := constants[node.Name]
-		if !ok {
-			return "", false
-		}
-		return value, true
+		return value, ok
 	default:
 		return "", false
 	}
 }
 
+// ---------------------------------------------------------------------------
+// Exporter composite-literal extraction (CX-2)
+// ---------------------------------------------------------------------------
+
+// extractExporterInfo finds the exporter function referenced from a
+// RegisterExporter(...) call and walks its return statement to fill an
+// exporterInfo. Best-effort: unknown fields stay zero-valued rather than
+// causing the whole call to fail.
+func extractExporterInfo(
+	call registrationCall,
+	pkg *packageInfo,
+	packages map[string]*packageInfo,
+	genesyscloudRoot string,
+) (*exporterInfo, bool) {
+	if call.exporterFunc == "" {
+		return nil, false
+	}
+	funcRef, ok := pkg.funcs[call.exporterFunc]
+	if !ok {
+		return nil, false
+	}
+	if funcRef.decl.Body == nil {
+		return nil, false
+	}
+
+	literal, ok := findResourceExporterLiteral(funcRef.decl.Body)
+	if !ok {
+		return nil, false
+	}
+
+	ctx := resolveContext{
+		localConstants:   pkg.stringConstants,
+		fileImports:      funcRef.file.imports,
+		packagesByDir:    packages,
+		genesyscloudRoot: genesyscloudRoot,
+	}
+	return parseExporterCompositeLit(literal, ctx), true
+}
+
+// resolveContext is the bag of data needed by helpers that turn AST
+// expressions into concrete strings. Kept as a single struct so the helpers
+// stay readable without long argument lists.
+type resolveContext struct {
+	localConstants   map[string]string
+	fileImports      map[string]string // alias -> full import path
+	packagesByDir    map[string]*packageInfo
+	genesyscloudRoot string
+}
+
+// findResourceExporterLiteral scans a function body for a
+// `return &<X>.ResourceExporter{...}` (or bare composite) and returns it.
+func findResourceExporterLiteral(body *ast.BlockStmt) (*ast.CompositeLit, bool) {
+	var found *ast.CompositeLit
+	ast.Inspect(body, func(n ast.Node) bool {
+		if found != nil {
+			return false
+		}
+		retStmt, ok := n.(*ast.ReturnStmt)
+		if !ok {
+			return true
+		}
+		if len(retStmt.Results) != 1 {
+			return true
+		}
+		expr := retStmt.Results[0]
+		if unary, ok := expr.(*ast.UnaryExpr); ok && unary.Op == token.AND {
+			expr = unary.X
+		}
+		lit, ok := expr.(*ast.CompositeLit)
+		if !ok {
+			return true
+		}
+		if !isResourceExporterType(lit.Type) {
+			return true
+		}
+		found = lit
+		return false
+	})
+	return found, found != nil
+}
+
+// isResourceExporterType matches `X.ResourceExporter` type expressions. We
+// only care about the Sel name because different provider packages import
+// resource_exporter under different aliases (`resource_exporter`,
+// `resourceExporter`, `re`, ...).
+func isResourceExporterType(expr ast.Expr) bool {
+	selector, ok := expr.(*ast.SelectorExpr)
+	if !ok {
+		return false
+	}
+	return selector.Sel.Name == "ResourceExporter"
+}
+
+func parseExporterCompositeLit(lit *ast.CompositeLit, ctx resolveContext) *exporterInfo {
+	info := &exporterInfo{}
+	for _, elt := range lit.Elts {
+		keyValue, ok := elt.(*ast.KeyValueExpr)
+		if !ok {
+			continue
+		}
+		keyIdent, ok := keyValue.Key.(*ast.Ident)
+		if !ok {
+			continue
+		}
+
+		switch keyIdent.Name {
+		case "IsSingleton":
+			info.IsSingleton = resolveBool(keyValue.Value)
+		case "ExportId":
+			info.ExportID = resolveStringExpr(keyValue.Value, ctx)
+		case "RefAttrs":
+			info.RefAttrs = parseRefAttrsMap(keyValue.Value, ctx)
+		case "EncodedRefAttrs":
+			info.EncodedRefAttrs = parseEncodedRefAttrsMap(keyValue.Value, ctx)
+		case "ExcludedAttributes":
+			info.ExcludedAttributes = parseStringSlice(keyValue.Value, ctx)
+		case "ThirdPartyRefAttrs":
+			info.ThirdPartyRefAttrs = parseStringSlice(keyValue.Value, ctx)
+		case "CustomFileWriter":
+			info.CustomFileDirectory = parseCustomFileWriterSubDir(keyValue.Value, ctx)
+		case "CustomAttributeResolver":
+			info.HasCustomResolvers = compositeLitHasEntries(keyValue.Value)
+		}
+	}
+	return info
+}
+
+// parseRefAttrsMap turns `map[string]*Y.RefAttrSettings{"attr": {RefType: ...}}`
+// into a sorted []model.RefAttr. Attributes whose RefType cannot be resolved
+// still appear, but with RefType == "" so callers can flag them.
+func parseRefAttrsMap(expr ast.Expr, ctx resolveContext) []model.RefAttr {
+	lit, ok := expr.(*ast.CompositeLit)
+	if !ok {
+		return nil
+	}
+	if len(lit.Elts) == 0 {
+		return nil
+	}
+
+	attrs := make([]model.RefAttr, 0, len(lit.Elts))
+	for _, elt := range lit.Elts {
+		keyValue, ok := elt.(*ast.KeyValueExpr)
+		if !ok {
+			continue
+		}
+		attrName, ok := stringLiteralValue(keyValue.Key)
+		if !ok {
+			continue
+		}
+		refType, altValues := parseRefAttrSettings(keyValue.Value, ctx)
+		attrs = append(attrs, model.RefAttr{
+			Attribute: attrName,
+			RefType:   refType,
+			AltValues: altValues,
+		})
+	}
+	sort.Slice(attrs, func(i, j int) bool {
+		return attrs[i].Attribute < attrs[j].Attribute
+	})
+	return attrs
+}
+
+// parseEncodedRefAttrsMap unwraps
+//
+//	map[*resourceExporter.JsonEncodeRefAttr]*resourceExporter.RefAttrSettings{
+//	    {Attr: "config.properties", NestedAttr: "groups"}: {RefType: "genesyscloud_group"},
+//	    ...
+//	}
+//
+// into a sorted []model.EncodedRefAttr. Keys can be written either as
+// `&Y.JsonEncodeRefAttr{...}` or just `{Attr: ..., NestedAttr: ...}` — Go
+// auto-addresses the composite literal when the map's key type is a pointer.
+// Both spellings are handled.
+func parseEncodedRefAttrsMap(expr ast.Expr, ctx resolveContext) []model.EncodedRefAttr {
+	lit, ok := expr.(*ast.CompositeLit)
+	if !ok {
+		return nil
+	}
+	if len(lit.Elts) == 0 {
+		return nil
+	}
+
+	attrs := make([]model.EncodedRefAttr, 0, len(lit.Elts))
+	for _, elt := range lit.Elts {
+		keyValue, ok := elt.(*ast.KeyValueExpr)
+		if !ok {
+			continue
+		}
+		container, nested, ok := parseJsonEncodeRefAttrKey(keyValue.Key)
+		if !ok {
+			continue
+		}
+		refType, altValues := parseRefAttrSettings(keyValue.Value, ctx)
+		attrs = append(attrs, model.EncodedRefAttr{
+			ContainerAttribute: container,
+			NestedAttribute:    nested,
+			RefType:            refType,
+			AltValues:          altValues,
+		})
+	}
+	sort.Slice(attrs, func(i, j int) bool {
+		if attrs[i].ContainerAttribute != attrs[j].ContainerAttribute {
+			return attrs[i].ContainerAttribute < attrs[j].ContainerAttribute
+		}
+		return attrs[i].NestedAttribute < attrs[j].NestedAttribute
+	})
+	return attrs
+}
+
+// parseJsonEncodeRefAttrKey pulls the Attr / NestedAttr string values from a
+// JsonEncodeRefAttr composite literal.
+func parseJsonEncodeRefAttrKey(expr ast.Expr) (container, nested string, ok bool) {
+	if unary, isUnary := expr.(*ast.UnaryExpr); isUnary && unary.Op == token.AND {
+		expr = unary.X
+	}
+	lit, isLit := expr.(*ast.CompositeLit)
+	if !isLit {
+		return "", "", false
+	}
+	for _, elt := range lit.Elts {
+		keyValue, isKV := elt.(*ast.KeyValueExpr)
+		if !isKV {
+			continue
+		}
+		keyIdent, isIdent := keyValue.Key.(*ast.Ident)
+		if !isIdent {
+			continue
+		}
+		value, isStr := stringLiteralValue(keyValue.Value)
+		if !isStr {
+			continue
+		}
+		switch keyIdent.Name {
+		case "Attr":
+			container = value
+		case "NestedAttr":
+			nested = value
+		}
+	}
+	if container == "" && nested == "" {
+		return "", "", false
+	}
+	return container, nested, true
+}
+
+// parseRefAttrSettings extracts RefType and AltValues from a `&Y.RefAttrSettings{...}`
+// composite literal.
+func parseRefAttrSettings(expr ast.Expr, ctx resolveContext) (string, []string) {
+	if unary, ok := expr.(*ast.UnaryExpr); ok && unary.Op == token.AND {
+		expr = unary.X
+	}
+	lit, ok := expr.(*ast.CompositeLit)
+	if !ok {
+		return "", nil
+	}
+
+	var (
+		refType   string
+		altValues []string
+	)
+	for _, elt := range lit.Elts {
+		keyValue, ok := elt.(*ast.KeyValueExpr)
+		if !ok {
+			continue
+		}
+		keyIdent, ok := keyValue.Key.(*ast.Ident)
+		if !ok {
+			continue
+		}
+		switch keyIdent.Name {
+		case "RefType":
+			refType = resolveStringExpr(keyValue.Value, ctx)
+		case "AltValues":
+			altValues = parseStringSlice(keyValue.Value, ctx)
+		}
+	}
+	return refType, altValues
+}
+
+// parseStringSlice unwraps `[]string{"a", "b", CONST}` literals, resolving
+// identifiers against local constants when possible.
+func parseStringSlice(expr ast.Expr, ctx resolveContext) []string {
+	lit, ok := expr.(*ast.CompositeLit)
+	if !ok {
+		return nil
+	}
+	if len(lit.Elts) == 0 {
+		return nil
+	}
+	out := make([]string, 0, len(lit.Elts))
+	for _, elt := range lit.Elts {
+		if value := resolveStringExpr(elt, ctx); value != "" {
+			out = append(out, value)
+		}
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
+}
+
+// parseCustomFileWriterSubDir digs the SubDirectory field out of a
+// `CustomFileWriterSettings{...}` composite literal.
+func parseCustomFileWriterSubDir(expr ast.Expr, ctx resolveContext) string {
+	lit, ok := expr.(*ast.CompositeLit)
+	if !ok {
+		return ""
+	}
+	for _, elt := range lit.Elts {
+		keyValue, ok := elt.(*ast.KeyValueExpr)
+		if !ok {
+			continue
+		}
+		keyIdent, ok := keyValue.Key.(*ast.Ident)
+		if !ok {
+			continue
+		}
+		if keyIdent.Name == "SubDirectory" {
+			return resolveStringExpr(keyValue.Value, ctx)
+		}
+	}
+	return ""
+}
+
+// compositeLitHasEntries reports whether the value is a composite literal
+// that actually contains at least one element. Used for HasCustomResolvers:
+// declaring `CustomAttributeResolver: map[...]*...{}` with no entries is
+// effectively "no custom resolvers" and shouldn't be counted.
+func compositeLitHasEntries(expr ast.Expr) bool {
+	lit, ok := expr.(*ast.CompositeLit)
+	if !ok {
+		return false
+	}
+	return len(lit.Elts) > 0
+}
+
+// ---------------------------------------------------------------------------
+// Value-resolution primitives shared by the composite-literal helpers
+// ---------------------------------------------------------------------------
+
+// resolveStringExpr converts an expression that is expected to evaluate to a
+// string into the actual string, drawing on local constants and, when the
+// expression is `alias.Ident`, the target package's constants.
+func resolveStringExpr(expr ast.Expr, ctx resolveContext) string {
+	switch node := expr.(type) {
+	case *ast.BasicLit:
+		if value, ok := stringLiteralValue(node); ok {
+			return value
+		}
+	case *ast.Ident:
+		if value, ok := ctx.localConstants[node.Name]; ok {
+			return value
+		}
+	case *ast.SelectorExpr:
+		aliasIdent, ok := node.X.(*ast.Ident)
+		if !ok {
+			return ""
+		}
+		importPath, ok := ctx.fileImports[aliasIdent.Name]
+		if !ok {
+			return ""
+		}
+		targetDir := importPathToProviderDir(importPath, ctx.genesyscloudRoot)
+		if targetDir == "" {
+			return ""
+		}
+		targetPkg, ok := ctx.packagesByDir[targetDir]
+		if !ok {
+			return ""
+		}
+		if value, ok := targetPkg.stringConstants[node.Sel.Name]; ok {
+			return value
+		}
+	}
+	return ""
+}
+
+func resolveBool(expr ast.Expr) bool {
+	ident, ok := expr.(*ast.Ident)
+	if !ok {
+		return false
+	}
+	return ident.Name == "true"
+}
+
+// importPathToProviderDir turns something like
+// `github.com/mypurecloud/terraform-provider-genesyscloud/genesyscloud/auth_division`
+// into `<genesyscloudRoot>/auth_division`. Returns "" for import paths that
+// aren't rooted inside `.../genesyscloud/`.
+func importPathToProviderDir(importPath, genesyscloudRoot string) string {
+	idx := strings.LastIndex(importPath, providerPathSegment)
+	if idx < 0 {
+		return ""
+	}
+	relPath := importPath[idx+len(providerPathSegment):]
+	if relPath == "" {
+		return ""
+	}
+	return filepath.Join(genesyscloudRoot, filepath.FromSlash(relPath))
+}
+
+func stringLiteralValue(expr ast.Expr) (string, bool) {
+	basic, ok := expr.(*ast.BasicLit)
+	if !ok || basic.Kind != token.STRING {
+		return "", false
+	}
+	value, err := strconv.Unquote(basic.Value)
+	if err != nil {
+		return "", false
+	}
+	return value, true
+}
+
+// ---------------------------------------------------------------------------
+// Final assembly
+// ---------------------------------------------------------------------------
+
 func buildProviderResources(records map[string]*registrationRecord) []model.ProviderResource {
 	resources := make([]model.ProviderResource, 0, len(records))
 	for _, record := range records {
-		resources = append(resources, model.ProviderResource{
+		resource := model.ProviderResource{
 			TerraformType: record.terraformType,
 			HasResource:   record.hasResource,
 			HasDataSource: record.hasDataSource,
 			HasExporter:   record.hasExporter,
-		})
+		}
+		if record.exporter != nil {
+			resource.IsSingleton = record.exporter.IsSingleton
+			resource.ExportID = record.exporter.ExportID
+			resource.RefAttrs = record.exporter.RefAttrs
+			resource.EncodedRefAttrs = record.exporter.EncodedRefAttrs
+			resource.ExcludedAttributes = record.exporter.ExcludedAttributes
+			resource.ThirdPartyRefAttrs = record.exporter.ThirdPartyRefAttrs
+			resource.CustomFileDirectory = record.exporter.CustomFileDirectory
+			resource.HasCustomResolvers = record.exporter.HasCustomResolvers
+		}
+		resources = append(resources, resource)
 	}
 	sort.Slice(resources, func(i, j int) bool {
 		return resources[i].TerraformType < resources[j].TerraformType
@@ -318,15 +836,4 @@ func requireDirectory(path string) error {
 		return fmt.Errorf("provider repo path is not a directory: %s", path)
 	}
 	return nil
-}
-
-// shortenPath renders a repo-relative path so log lines and future warning
-// messages stay compact. It looks for the last `genesyscloud/` segment and
-// returns everything from there.
-func shortenPath(path string) string {
-	needle := string(filepath.Separator) + "genesyscloud" + string(filepath.Separator)
-	if idx := strings.LastIndex(path, needle); idx >= 0 {
-		return path[idx+1:]
-	}
-	return filepath.Base(path)
 }

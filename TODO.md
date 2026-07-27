@@ -78,19 +78,21 @@ Deliver an offline CLI that scans both repos, joins provider exporter metadata w
 
 - Owner: `CX`
 - Priority: `P0`
-- Status: `Todo`
+- Status: `Done`
 - Files: `internal/scanner/provider/scanner.go`, provider `resource_exporter.go`
 - Goal: Emit `RefAttrs`, `ExcludedAttributes`, singleton flags, `ExportId`, file-output fields, and custom resolver presence.
 - Acceptance: `genesyscloud_routing_queue` and `genesyscloud_routing_utilization` show meaningful exporter metadata.
+- Notes: Extended the scanner to walk each `RegisterExporter(RSType, FooExporter())` call site to its exporter function, locate the `&resourceExporter.ResourceExporter{...}` composite literal in the return statement, and pull the CX-2 fields off it. Cross-package `alias.ResourceType` selectors on `RefType` are resolved via each file's import table, which cleanly covers 23 of the 24 `routing_queue` RefAttrs on the live provider (the one unresolved attribute is a `{}` TODO placeholder in the provider source itself, not a scanner bug). Verified against the real repo: `routing_queue` reports 24 RefAttrs + `HasCustomResolvers: true`; `routing_utilization` reports `IsSingleton: true, ExportID: "genesyscloud_routing_utilization"`; `architect_user_prompt` reports `CustomFileDirectory: "audio_prompts"` + two `ThirdPartyRefAttrs`. `EncodedRefAttrs` and `BlockHash` intentionally deferred to CX-3 / CX-6.
 
 ### CX-3: RefAttr Dependency Graph
 
 - Owner: `CX`
 - Priority: `P0`
-- Status: `Todo`
-- Files: `internal/scanner/provider/scanner.go`
+- Status: `Done`
+- Files: `internal/scanner/provider/scanner.go`, `internal/matrix/matrix.go`, `internal/model/model.go`
 - Goal: Convert provider `RefAttrs` and `EncodedRefAttrs` into dependency edges.
 - Acceptance: `dependency-closure genesyscloud_routing_queue` shows direct dependencies and their readiness.
+- Notes: Added `EncodedRefAttr` type + `EncodedRefAttrs` field to `model.ProviderResource`. Scanner now walks the `map[*JsonEncodeRefAttr]*RefAttrSettings{...}` composite literal (Go auto-addresses struct-literal keys, so both `&Y.JsonEncodeRefAttr{...}` and bare `{Attr: ..., NestedAttr: ...}` spellings are handled). Matrix `buildDependencies` was reworked to (a) always emit dep edges — including for blocked resources so operators can see the graph — and (b) compute real `ProviderExportable` / `MRMOSupported` / `Status` per edge by cross-referencing the provider and MRMO manifests instead of the old hardcoded `warning`. Edge classification: `ready` = exportable + MRMO-supported, `warning` = exportable + not MRMO-supported, `blocked` = not exportable, `unknown` = RefType could not be resolved statically. Verified on the live provider: `dependency-closure genesyscloud_routing_queue` prints all 24 direct RefAttr edges with per-edge readiness; `dependency-closure genesyscloud_integration` prints one `RefAttrs.*` edge plus six `EncodedRefAttrs.config.properties.*` edges.
 
 ### CX-4: Singleton Safety Validation
 

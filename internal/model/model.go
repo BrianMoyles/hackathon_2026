@@ -6,24 +6,36 @@ type ProviderManifest struct {
 }
 
 type ProviderResource struct {
-	TerraformType       string    `json:"terraformType"`
-	HasResource         bool      `json:"hasResource"`
-	HasDataSource       bool      `json:"hasDataSource"`
-	HasExporter         bool      `json:"hasExporter"`
-	IsSingleton         bool      `json:"isSingleton"`
-	ExportID            string    `json:"exportId,omitempty"`
-	RefAttrs            []RefAttr `json:"refAttrs,omitempty"`
-	ExcludedAttributes  []string  `json:"excludedAttributes,omitempty"`
-	ThirdPartyRefAttrs  []string  `json:"thirdPartyRefAttrs,omitempty"`
-	CustomFileDirectory string    `json:"customFileDirectory,omitempty"`
-	HasCustomResolvers  bool      `json:"hasCustomResolvers"`
-	BlockHashObserved   bool      `json:"blockHashObserved"`
+	TerraformType       string           `json:"terraformType"`
+	HasResource         bool             `json:"hasResource"`
+	HasDataSource       bool             `json:"hasDataSource"`
+	HasExporter         bool             `json:"hasExporter"`
+	IsSingleton         bool             `json:"isSingleton"`
+	ExportID            string           `json:"exportId,omitempty"`
+	RefAttrs            []RefAttr        `json:"refAttrs,omitempty"`
+	EncodedRefAttrs     []EncodedRefAttr `json:"encodedRefAttrs,omitempty"`
+	ExcludedAttributes  []string         `json:"excludedAttributes,omitempty"`
+	ThirdPartyRefAttrs  []string         `json:"thirdPartyRefAttrs,omitempty"`
+	CustomFileDirectory string           `json:"customFileDirectory,omitempty"`
+	HasCustomResolvers  bool             `json:"hasCustomResolvers"`
+	BlockHashObserved   bool             `json:"blockHashObserved"`
 }
 
 type RefAttr struct {
 	Attribute string   `json:"attribute"`
 	RefType   string   `json:"refType"`
 	AltValues []string `json:"altValues,omitempty"`
+}
+
+// EncodedRefAttr describes a reference that lives inside a JSON-encoded
+// attribute on the parent resource. The provider stores these separately from
+// RefAttrs because the attribute itself is a JSON string that has to be
+// parsed before the nested reference is visible.
+type EncodedRefAttr struct {
+	ContainerAttribute string   `json:"containerAttribute"`
+	NestedAttribute    string   `json:"nestedAttribute"`
+	RefType            string   `json:"refType"`
+	AltValues          []string `json:"altValues,omitempty"`
 }
 
 type MRMOManifest struct {
