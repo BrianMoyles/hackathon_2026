@@ -1,0 +1,33 @@
+# Trimmed fixture covering single-handler and handlerMap topic wiring.
+topics:
+  AssignmentQueueConfigurationChange:
+    handler: "AssignmentQueueConfigurationHandler"
+    resourceTypeRef: "routing-queue"
+    avroSchemaS3Path: "repository"
+    validation:
+      type: "accept_all"
+    supportedTypes:
+      - "com.inin.avro.event.assignment.QueueConfigurationChangedEvent"
+
+  AuthorizationDivisionChange:
+    handler: "AuthorizationDivisionChangeHandler"
+    resourceTypeRef: "auth-division"
+    avroSchemaS3Path: "registry"
+    validation:
+      type: "accept_all"
+    supportedTypes:
+      - "com.inin.avro.event.authorization.DivisionChangedEvent"
+
+  ArchitectObjectNotification:
+    handlerMap:
+      - avroSchema: "com.inin.avro.notifications.architect.ArchitectFlowNotification"
+        handler: ArchitectFlowHandler
+        resourceTypeRef: "architect-flow"
+        validation:
+          type: "field_match"
+    supportedTypes:
+      - "com.inin.avro.notifications.architect.ArchitectFlowNotification"
+
+settings:
+  logUnhandledMessages: true
+  strictHandlerValidation: true

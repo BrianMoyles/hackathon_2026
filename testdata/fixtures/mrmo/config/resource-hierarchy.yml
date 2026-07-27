@@ -1,0 +1,10 @@
+# Trimmed fixture for hierarchy tier lookup.
+version: fixture
+tiers:
+  - tier: 0
+    resources:
+      - genesyscloud_auth_division
+  - tier: 4
+    resources:
+      - genesyscloud_flow
+      - genesyscloud_routing_queue

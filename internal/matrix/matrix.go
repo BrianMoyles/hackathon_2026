@@ -139,6 +139,9 @@ func buildResourceReadiness(terraformType string, providerResource *model.Provid
 	if mrmoResource != nil && !mrmoResource.HandlerRegistered {
 		readiness.addBlocker("MRMO_HANDLER_FACTORY_MISSING", "resource handler is not registered")
 	}
+	if mrmoResource != nil && mrmoResource.Tier < 0 {
+		readiness.addBlocker("MRMO_HIERARCHY_TIER_MISSING", "resource has no reconciliation hierarchy tier")
+	}
 	if len(readiness.Issues) == 0 && providerResource != nil {
 		for _, ref := range providerResource.RefAttrs {
 			readiness.Dependencies = append(readiness.Dependencies, DependencyReadiness{
