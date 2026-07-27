@@ -8,32 +8,32 @@ Deliver an offline CLI that scans both repos, joins provider exporter metadata w
 
 ## MRMO Developer Board
 
-### MRMO-1: Parse MRMO Resource Registry
+<!-- ### MRMO-1: Parse MRMO Resource Registry
 
 - Owner: `MRMO`
 - Priority: `P0`
 - Status: `Todo`
 - Files: `internal/scanner/mrmo/scanner.go`, MRMO `internal/resourcetypes/registry.go`
 - Goal: Extract `resourceTypeRef`, Terraform type, domain, and tier source.
-- Acceptance: Scanner emits all MRMO registry entries with stable refs and Terraform types.
+- Acceptance: Scanner emits all MRMO registry entries with stable refs and Terraform types. -->
 
-### MRMO-2: Parse Topics YAML
+<!-- ### MRMO-2: Parse Topics YAML
 
 - Owner: `MRMO`
 - Priority: `P0`
 - Status: `Todo`
 - Files: `internal/scanner/mrmo/scanner.go`, MRMO `config/topics.yaml`
 - Goal: Extract topic, handler, handlerMap entries, Avro schema path, supported types, validation, and `resourceTypeRef`.
-- Acceptance: Scanner maps each resource ref to its topic and handler wiring.
+- Acceptance: Scanner maps each resource ref to its topic and handler wiring. -->
 
-### MRMO-3: Parse Resource Hierarchy
+<!-- ### MRMO-3: Parse Resource Hierarchy
 
 - Owner: `MRMO`
 - Priority: `P0`
 - Status: `Todo`
 - Files: `internal/scanner/mrmo/scanner.go`, MRMO `config/resource-hierarchy.yml`
 - Goal: Extract reconciliation tier for each Terraform resource type.
-- Acceptance: Missing hierarchy tier becomes `MRMO_HIERARCHY_TIER_MISSING`.
+- Acceptance: Missing hierarchy tier becomes `MRMO_HIERARCHY_TIER_MISSING`. -->
 
 ### MRMO-4: Detect Handler Factory Coverage
 
