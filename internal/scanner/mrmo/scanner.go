@@ -12,29 +12,29 @@ func Scan(repoPath string) (model.MRMOManifest, error) {
 		return model.MRMOManifest{}, err
 	}
 
-	// TODO(MRMO): populate from registry.go, topics.yaml, resource-hierarchy.yml,
-	// handler factory registrations, and integration tests.
+	resources, err := scanRegistry(repoPath)
+	if err != nil {
+		return model.MRMOManifest{}, err
+	}
+
+	bindings, topicCount, err := parseTopicBindings(repoPath)
+	if err != nil {
+		return model.MRMOManifest{}, err
+	}
+	applyTopicBindings(resources, bindings)
+
+	tiers, err := parseHierarchyTiers(repoPath)
+	if err != nil {
+		return model.MRMOManifest{}, err
+	}
+	applyHierarchyTiers(resources, tiers)
+
+	// TODO(MRMO-4+): populate handler factories, integration tests,
+	// and reconciliation eligibility.
 	return model.MRMOManifest{
 		RepoPath:   repoPath,
-		TopicCount: 1,
-		Resources: []model.MRMOResource{
-			{
-				ResourceTypeRef:        "routing-queue",
-				TerraformType:          "genesyscloud_routing_queue",
-				Domain:                 "routing",
-				Tier:                   4,
-				HandlerRegistered:      true,
-				ReconciliationEligible: true,
-				IntegrationTestStatus:  "covered",
-				Topics: []model.TopicEntry{
-					{
-						Topic:            "AssignmentQueueConfigurationChange",
-						Handler:          "AssignmentQueueConfigurationHandler",
-						AvroSchemaS3Path: "repository",
-					},
-				},
-			},
-		},
+		Resources:  resources,
+		TopicCount: topicCount,
 	}, nil
 }
 

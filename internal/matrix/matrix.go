@@ -147,6 +147,9 @@ func buildResourceReadiness(
 	if mrmoResource != nil && !mrmoResource.HandlerRegistered {
 		readiness.addBlocker("MRMO_HANDLER_FACTORY_MISSING", "resource handler is not registered")
 	}
+	if mrmoResource != nil && mrmoResource.Tier < 0 {
+		readiness.addBlocker("MRMO_HIERARCHY_TIER_MISSING", "resource has no reconciliation hierarchy tier")
+	}
 
 	// CX-3: always emit dependency edges, even when the resource itself is
 	// blocked. Operators debugging a red resource still want to see which

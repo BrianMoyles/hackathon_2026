@@ -60,7 +60,9 @@ type TopicEntry struct {
 	Topic            string   `json:"topic"`
 	Handler          string   `json:"handler"`
 	AvroSchemaS3Path string   `json:"avroSchemaS3Path,omitempty"`
+	AvroSchema       string   `json:"avroSchema,omitempty"`
 	SupportedTypes   []string `json:"supportedTypes,omitempty"`
+	ValidationType   string   `json:"validationType,omitempty"`
 }
 
 type Issue struct {

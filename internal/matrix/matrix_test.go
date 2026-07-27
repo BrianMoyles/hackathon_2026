@@ -192,3 +192,45 @@ func expectDep(t *testing.T, deps map[string]DependencyReadiness, source string,
 		t.Errorf("%s Status = %q, want %q", source, got.Status, want.Status)
 	}
 }
+
+// TestBuildFlagsMissingHierarchyTier is the MRMO-3 anchor test brought in
+// from `mo1`. It confirms that a resource whose tier is the "missing"
+// sentinel (Tier < 0) picks up the MRMO_HIERARCHY_TIER_MISSING blocker so
+// the matrix reflects hierarchy-file gaps.
+func TestBuildFlagsMissingHierarchyTier(t *testing.T) {
+	report := Build(
+		model.ProviderManifest{
+			Resources: []model.ProviderResource{{
+				TerraformType: "genesyscloud_routing_queue",
+				HasResource:   true,
+				HasExporter:   true,
+			}},
+		},
+		model.MRMOManifest{
+			Resources: []model.MRMOResource{{
+				ResourceTypeRef:   "routing-queue",
+				TerraformType:     "genesyscloud_routing_queue",
+				Tier:              -1,
+				HandlerRegistered: true,
+				Topics: []model.TopicEntry{{
+					Topic:   "AssignmentQueueConfigurationChange",
+					Handler: "AssignmentQueueConfigurationHandler",
+				}},
+			}},
+		},
+	)
+
+	if len(report.Resources) != 1 {
+		t.Fatalf("resource count = %d, want 1", len(report.Resources))
+	}
+	found := false
+	for _, issue := range report.Resources[0].Issues {
+		if issue.Code == "MRMO_HIERARCHY_TIER_MISSING" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("expected MRMO_HIERARCHY_TIER_MISSING, got %#v", report.Resources[0].Issues)
+	}
+}
