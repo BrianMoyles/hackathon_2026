@@ -98,10 +98,11 @@ Deliver an offline CLI that scans both repos, joins provider exporter metadata w
 
 - Owner: `CX`
 - Priority: `P0`
-- Status: `Todo`
-- Files: `internal/scanner/provider/scanner.go`
+- Status: `Done`
+- Files: `internal/scanner/provider/scanner.go`, `internal/matrix/matrix.go`
 - Goal: Check `IsSingleton` resources always have an `ExportId`.
 - Acceptance: Missing singleton export IDs become `PROVIDER_SINGLETON_EXPORT_ID_MISSING`.
+- Notes: The `IsSingleton` and `ExportID` fields are already populated by the CX-2 scanner, so CX-4 just needed a matrix blocker that pairs them. Added `PROVIDER_SINGLETON_EXPORT_ID_MISSING` alongside the other provider-side blockers in `buildResourceReadiness`, guarded by `providerResource != nil && IsSingleton && ExportID == ""` so it doesn't double-fire when the resource block itself is missing. Locked with `TestBuild_SingletonExportIDMissing`, which walks Build with three fixtures (broken singleton, healthy singleton, non-singleton) and asserts the blocker fires exactly on the broken one. Verified on the live provider: all 14 singletons (`genesyscloud_idp_*`, `routing_utilization`, `routing_settings`, `organization_authentication_settings`, `outbound_settings`, `outbound_wrapupcodemappings`, `conversations_settings`, `conversations_messaging_supportedcontent_default`) already carry an `ExportID`, so the new blocker stays quiet and will only surface if a future singleton is landed without one.
 
 ### CX-5: File Output Metadata
 
