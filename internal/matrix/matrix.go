@@ -157,6 +157,14 @@ func buildResourceReadiness(
 	if mrmoResource != nil && mrmoResource.Tier < 0 {
 		readiness.addBlocker("MRMO_HIERARCHY_TIER_MISSING", "resource has no reconciliation hierarchy tier")
 	}
+	if mrmoResource != nil {
+		switch mrmoResource.IntegrationTestStatus {
+		case "missing":
+			readiness.addWarning("MRMO_INTEGRATION_TEST_MISSING", "resource has no handler integration test coverage")
+		case "unknown":
+			readiness.addWarning("MRMO_INTEGRATION_TEST_UNKNOWN", "resource integration test coverage could not be determined")
+		}
+	}
 
 	// CX-3: always emit dependency edges, even when the resource itself is
 	// blocked. Operators debugging a red resource still want to see which
@@ -248,6 +256,20 @@ func (r *ResourceReadiness) addBlocker(code, message string) {
 	r.Score = 0
 	r.Issues = append(r.Issues, model.Issue{
 		Severity: "blocker",
+		Code:     code,
+		Message:  message,
+	})
+}
+
+func (r *ResourceReadiness) addWarning(code, message string) {
+	if r.Status != "blocked" {
+		r.Status = "warning"
+		if r.Score > 70 {
+			r.Score = 70
+		}
+	}
+	r.Issues = append(r.Issues, model.Issue{
+		Severity: "warning",
 		Code:     code,
 		Message:  message,
 	})

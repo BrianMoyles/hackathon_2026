@@ -35,16 +35,16 @@ Deliver an offline CLI that scans both repos, joins provider exporter metadata w
 - Goal: Extract reconciliation tier for each Terraform resource type.
 - Acceptance: Missing hierarchy tier becomes `MRMO_HIERARCHY_TIER_MISSING`. -->
 
-### MRMO-4: Detect Handler Factory Coverage
+<!-- ### MRMO-4: Detect Handler Factory Coverage
 
 - Owner: `MRMO`
 - Priority: `P0`
 - Status: `Todo`
 - Files: `internal/scanner/mrmo/scanner.go`, MRMO `internal/handlers/`
 - Goal: Scan `RegisterHandlerFactory` calls and map handler names to files.
-- Acceptance: Topic handler names without a factory become `MRMO_HANDLER_FACTORY_MISSING`.
+- Acceptance: Topic handler names without a factory become `MRMO_HANDLER_FACTORY_MISSING`. -->
 
-### MRMO-5: Detect Integration Test Coverage
+<!-- ### MRMO-5: Detect Integration Test Coverage
 
 - Owner: `MRMO`
 - Priority: `P1`
@@ -60,7 +60,7 @@ Deliver an offline CLI that scans both repos, joins provider exporter metadata w
 - Status: `Todo`
 - Files: `internal/scanner/mrmo/scanner.go`
 - Goal: Mark a resource eligible only when it is topic-wired and present in the hierarchy.
-- Acceptance: `explain <resource>` shows whether reconciliation will include the resource.
+- Acceptance: `explain <resource>` shows whether reconciliation will include the resource. -->
 
 ## CX as Code Developer Board
 

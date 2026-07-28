@@ -208,10 +208,11 @@ func TestBuildFlagsMissingHierarchyTier(t *testing.T) {
 		},
 		model.MRMOManifest{
 			Resources: []model.MRMOResource{{
-				ResourceTypeRef:   "routing-queue",
-				TerraformType:     "genesyscloud_routing_queue",
-				Tier:              -1,
-				HandlerRegistered: true,
+				ResourceTypeRef:       "routing-queue",
+				TerraformType:         "genesyscloud_routing_queue",
+				Tier:                  -1,
+				HandlerRegistered:     true,
+				IntegrationTestStatus: "covered",
 				Topics: []model.TopicEntry{{
 					Topic:   "AssignmentQueueConfigurationChange",
 					Handler: "AssignmentQueueConfigurationHandler",
@@ -233,6 +234,47 @@ func TestBuildFlagsMissingHierarchyTier(t *testing.T) {
 	if !found {
 		t.Fatalf("expected MRMO_HIERARCHY_TIER_MISSING, got %#v", report.Resources[0].Issues)
 	}
+}
+
+func TestBuildWarnsOnMissingIntegrationTests(t *testing.T) {
+	report := Build(
+		model.ProviderManifest{
+			Resources: []model.ProviderResource{{
+				TerraformType: "genesyscloud_routing_queue",
+				HasResource:   true,
+				HasExporter:   true,
+			}},
+		},
+		model.MRMOManifest{
+			Resources: []model.MRMOResource{{
+				ResourceTypeRef:       "routing-queue",
+				TerraformType:         "genesyscloud_routing_queue",
+				Tier:                  4,
+				HandlerRegistered:     true,
+				IntegrationTestStatus: "missing",
+				Topics: []model.TopicEntry{{
+					Topic:   "AssignmentQueueConfigurationChange",
+					Handler: "AssignmentQueueConfigurationHandler",
+				}},
+			}},
+		},
+	)
+
+	resource := report.Resources[0]
+	if resource.Status != "warning" {
+		t.Fatalf("status = %q, want warning", resource.Status)
+	}
+	if !containsCode(issueCodes(resource), "MRMO_INTEGRATION_TEST_MISSING") {
+		t.Fatalf("expected MRMO_INTEGRATION_TEST_MISSING, got %#v", resource.Issues)
+	}
+}
+
+func issueCodes(resource ResourceReadiness) []string {
+	codes := make([]string, 0, len(resource.Issues))
+	for _, issue := range resource.Issues {
+		codes = append(codes, issue.Code)
+	}
+	return codes
 }
 
 // TestBuild_SingletonExportIDMissing is the CX-4 anchor test. It walks a
