@@ -29,8 +29,20 @@ func Scan(repoPath string) (model.MRMOManifest, error) {
 	}
 	applyHierarchyTiers(resources, tiers)
 
-	// TODO(MRMO-4+): populate handler factories, integration tests,
-	// and reconciliation eligibility.
+	factories, err := scanHandlerFactories(repoPath)
+	if err != nil {
+		return model.MRMOManifest{}, err
+	}
+	applyHandlerFactories(resources, factories)
+
+	covered, err := scanIntegrationCoverage(repoPath)
+	if err != nil {
+		return model.MRMOManifest{}, err
+	}
+	applyIntegrationCoverage(resources, covered, covered != nil)
+
+	applyReconciliationEligibility(resources)
+
 	return model.MRMOManifest{
 		RepoPath:   repoPath,
 		Resources:  resources,

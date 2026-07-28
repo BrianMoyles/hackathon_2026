@@ -44,10 +44,9 @@ func scanRegistry(repoPath string) ([]model.MRMOResource, error) {
 		}
 
 		resources = append(resources, model.MRMOResource{
-			ResourceTypeRef:       entry.ref,
-			TerraformType:         terraformType,
-			Domain:                entry.domain,
-			IntegrationTestStatus: "unknown",
+			ResourceTypeRef: entry.ref,
+			TerraformType:   terraformType,
+			Domain:          entry.domain,
 		})
 	}
 

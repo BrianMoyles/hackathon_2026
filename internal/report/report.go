@@ -59,6 +59,14 @@ func WriteResource(w io.Writer, resource matrix.ResourceReadiness) error {
 		if _, err := fmt.Fprintf(w, "MRMO tier: %d\n", resource.MRMO.Tier); err != nil {
 			return err
 		}
+		if _, err := fmt.Fprintf(w, "Reconciliation eligible: %t\n", resource.MRMO.ReconciliationEligible); err != nil {
+			return err
+		}
+		if resource.MRMO.IntegrationTestStatus != "" {
+			if _, err := fmt.Fprintf(w, "Integration tests: %s\n", resource.MRMO.IntegrationTestStatus); err != nil {
+				return err
+			}
+		}
 		for _, topic := range resource.MRMO.Topics {
 			if _, err := fmt.Fprintf(w, "Topic: %s -> %s\n", topic.Topic, topic.Handler); err != nil {
 				return err
