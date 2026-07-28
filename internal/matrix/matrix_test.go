@@ -234,3 +234,65 @@ func TestBuildFlagsMissingHierarchyTier(t *testing.T) {
 		t.Fatalf("expected MRMO_HIERARCHY_TIER_MISSING, got %#v", report.Resources[0].Issues)
 	}
 }
+
+// TestBuild_SingletonExportIDMissing is the CX-4 anchor test. It walks a
+// small mixed manifest through Build and asserts that
+// PROVIDER_SINGLETON_EXPORT_ID_MISSING fires exactly for singleton
+// resources that lack an ExportID, and stays quiet for the well-formed
+// singleton and for non-singleton resources.
+func TestBuild_SingletonExportIDMissing(t *testing.T) {
+	report := Build(
+		model.ProviderManifest{
+			Resources: []model.ProviderResource{
+				// Broken: singleton with no ExportID -> blocker fires.
+				{
+					TerraformType: "genesyscloud_broken_singleton",
+					HasResource:   true,
+					HasExporter:   true,
+					IsSingleton:   true,
+				},
+				// Healthy: singleton with an ExportID -> blocker does NOT fire.
+				{
+					TerraformType: "genesyscloud_routing_utilization",
+					HasResource:   true,
+					HasExporter:   true,
+					IsSingleton:   true,
+					ExportID:      "genesyscloud_routing_utilization",
+				},
+				// Non-singleton with no ExportID -> irrelevant, blocker does NOT fire.
+				{
+					TerraformType: "genesyscloud_routing_queue",
+					HasResource:   true,
+					HasExporter:   true,
+				},
+			},
+		},
+		model.MRMOManifest{},
+	)
+
+	byType := make(map[string][]string, len(report.Resources))
+	for _, res := range report.Resources {
+		for _, issue := range res.Issues {
+			byType[res.TerraformType] = append(byType[res.TerraformType], issue.Code)
+		}
+	}
+
+	if !containsCode(byType["genesyscloud_broken_singleton"], "PROVIDER_SINGLETON_EXPORT_ID_MISSING") {
+		t.Errorf("broken singleton missing expected blocker: got %#v", byType["genesyscloud_broken_singleton"])
+	}
+	if containsCode(byType["genesyscloud_routing_utilization"], "PROVIDER_SINGLETON_EXPORT_ID_MISSING") {
+		t.Errorf("well-formed singleton fired blocker: got %#v", byType["genesyscloud_routing_utilization"])
+	}
+	if containsCode(byType["genesyscloud_routing_queue"], "PROVIDER_SINGLETON_EXPORT_ID_MISSING") {
+		t.Errorf("non-singleton fired blocker: got %#v", byType["genesyscloud_routing_queue"])
+	}
+}
+
+func containsCode(codes []string, want string) bool {
+	for _, code := range codes {
+		if code == want {
+			return true
+		}
+	}
+	return false
+}

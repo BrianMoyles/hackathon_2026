@@ -138,6 +138,13 @@ func buildResourceReadiness(
 	if providerResource == nil || !providerResource.HasExporter {
 		readiness.addBlocker("PROVIDER_EXPORTER_MISSING", "resource does not have a provider exporter")
 	}
+	// CX-4: singleton resources rely on ExportID as the deterministic sanitized
+	// name for the single instance in the exported HCL. Without it the exporter
+	// cannot produce a stable filename or reference key, so mark it as a
+	// blocker instead of failing later at export time.
+	if providerResource != nil && providerResource.IsSingleton && providerResource.ExportID == "" {
+		readiness.addBlocker("PROVIDER_SINGLETON_EXPORT_ID_MISSING", "singleton resource is missing an ExportId")
+	}
 	if mrmoResource == nil {
 		readiness.addBlocker("MRMO_REGISTRY_MISSING", "resource is not registered as MRMO-supported")
 	}
