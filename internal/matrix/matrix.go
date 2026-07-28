@@ -48,19 +48,21 @@ func Build(providerManifest model.ProviderManifest, mrmoManifest model.MRMOManif
 
 	var resources []ResourceReadiness
 	for terraformType, providerResource := range providerByType {
+		providerResource := providerResource
 		var mrmoResource *model.MRMOResource
 		if resource, ok := mrmoByType[terraformType]; ok {
 			resourceCopy := resource
 			mrmoResource = &resourceCopy
 		}
-		resource := buildResourceReadiness(terraformType, &providerResource, mrmoResource)
+		resource := buildResourceReadiness(terraformType, &providerResource, mrmoResource, providerByType, mrmoByType)
 		resources = append(resources, resource)
 	}
 	for terraformType, mrmoResource := range mrmoByType {
+		mrmoResource := mrmoResource
 		if _, ok := providerByType[terraformType]; ok {
 			continue
 		}
-		resource := buildResourceReadiness(terraformType, nil, &mrmoResource)
+		resource := buildResourceReadiness(terraformType, nil, &mrmoResource, providerByType, mrmoByType)
 		resources = append(resources, resource)
 	}
 
@@ -112,7 +114,13 @@ func DependencyClosure(providerManifest model.ProviderManifest, mrmoManifest mod
 	return resource.Dependencies
 }
 
-func buildResourceReadiness(terraformType string, providerResource *model.ProviderResource, mrmoResource *model.MRMOResource) ResourceReadiness {
+func buildResourceReadiness(
+	terraformType string,
+	providerResource *model.ProviderResource,
+	mrmoResource *model.MRMOResource,
+	providerByType map[string]model.ProviderResource,
+	mrmoByType map[string]model.MRMOResource,
+) ResourceReadiness {
 	readiness := ResourceReadiness{
 		TerraformType: terraformType,
 		Provider:      providerResource,
@@ -142,19 +150,90 @@ func buildResourceReadiness(terraformType string, providerResource *model.Provid
 	if mrmoResource != nil && mrmoResource.Tier < 0 {
 		readiness.addBlocker("MRMO_HIERARCHY_TIER_MISSING", "resource has no reconciliation hierarchy tier")
 	}
-	if len(readiness.Issues) == 0 && providerResource != nil {
-		for _, ref := range providerResource.RefAttrs {
-			readiness.Dependencies = append(readiness.Dependencies, DependencyReadiness{
-				TerraformType:      ref.RefType,
-				Source:             "RefAttrs." + ref.Attribute,
-				ProviderExportable: true,
-				MRMOSupported:      false,
-				Status:             "warning",
-			})
-		}
-	}
+
+	// CX-3: always emit dependency edges, even when the resource itself is
+	// blocked. Operators debugging a red resource still want to see which
+	// downstream types would need to be resolved before this one can move.
+	readiness.Dependencies = buildDependencies(providerResource, providerByType, mrmoByType)
 
 	return readiness
+}
+
+// buildDependencies flattens the provider resource's RefAttrs and
+// EncodedRefAttrs into a single DependencyReadiness list, tagging each edge
+// with whether the target is exportable in the provider and supported by
+// MRMO. The Source field carries the origin of the edge (attribute path) so
+// downstream reports can point back at the exact source of a broken link.
+func buildDependencies(
+	providerResource *model.ProviderResource,
+	providerByType map[string]model.ProviderResource,
+	mrmoByType map[string]model.MRMOResource,
+) []DependencyReadiness {
+	if providerResource == nil {
+		return nil
+	}
+	deps := make([]DependencyReadiness, 0, len(providerResource.RefAttrs)+len(providerResource.EncodedRefAttrs))
+	for _, ref := range providerResource.RefAttrs {
+		deps = append(deps, buildDependencyEdge(
+			ref.RefType,
+			"RefAttrs."+ref.Attribute,
+			providerByType,
+			mrmoByType,
+		))
+	}
+	for _, ref := range providerResource.EncodedRefAttrs {
+		source := "EncodedRefAttrs." + ref.ContainerAttribute
+		if ref.NestedAttribute != "" {
+			source += "." + ref.NestedAttribute
+		}
+		deps = append(deps, buildDependencyEdge(
+			ref.RefType,
+			source,
+			providerByType,
+			mrmoByType,
+		))
+	}
+	if len(deps) == 0 {
+		return nil
+	}
+	return deps
+}
+
+// buildDependencyEdge computes the readiness of a single dependency edge:
+//
+//	ready    = target is provider-exportable AND MRMO-supported
+//	warning  = target is provider-exportable but not MRMO-supported
+//	blocked  = target is not even provider-exportable
+//	unknown  = we could not statically resolve the target's Terraform type
+func buildDependencyEdge(
+	refType string,
+	source string,
+	providerByType map[string]model.ProviderResource,
+	mrmoByType map[string]model.MRMOResource,
+) DependencyReadiness {
+	edge := DependencyReadiness{
+		TerraformType: refType,
+		Source:        source,
+	}
+	if refType == "" {
+		edge.Status = "unknown"
+		return edge
+	}
+	if target, ok := providerByType[refType]; ok && target.HasExporter {
+		edge.ProviderExportable = true
+	}
+	if _, ok := mrmoByType[refType]; ok {
+		edge.MRMOSupported = true
+	}
+	switch {
+	case !edge.ProviderExportable:
+		edge.Status = "blocked"
+	case !edge.MRMOSupported:
+		edge.Status = "warning"
+	default:
+		edge.Status = "ready"
+	}
+	return edge
 }
 
 func (r *ResourceReadiness) addBlocker(code, message string) {
