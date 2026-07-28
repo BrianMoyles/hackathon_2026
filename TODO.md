@@ -108,19 +108,21 @@ Deliver an offline CLI that scans both repos, joins provider exporter metadata w
 
 - Owner: `CX`
 - Priority: `P1`
-- Status: `Todo`
-- Files: `internal/scanner/provider/scanner.go`
+- Status: `Done`
+- Files: `internal/scanner/provider/scanner.go`, `internal/model/model.go`, `internal/report/report.go`
 - Goal: Detect `ThirdPartyRefAttrs` and `CustomFileWriter.SubDirectory` for resources that write files.
 - Acceptance: Flow/user-prompt style resources show output-file behavior in `explain`.
+- Notes: `ThirdPartyRefAttrs` and `CustomFileWriter.SubDirectory` were already lifted off the `ResourceExporter` composite literal by CX-2. CX-5 adds `WritesFiles bool` on `ProviderResource`: true whenever the `CustomFileWriter{}` literal declares any field (writer func or SubDirectory), matching the runtime nil-check tfexporter uses. `report.WriteResource` now prints a dedicated file-output block (`Writes files`, `Output sub-directory`, `Third-party ref attributes`) whenever either signal is present. Also extended `findResourceExporterLiteral` to follow `return <ident>` back to a `<ident> := &resourceExporter.ResourceExporter{...}` assignment so architect_flow's variable-first return pattern is no longer silently skipped — this alone lit up `genesyscloud_flow`'s ThirdPartyRefAttrs and (via CX-6) its BlockHash observation. Verified on live provider: 7 resources report `WritesFiles: true` — `architect_user_prompt` (audio_prompts), `script` (scripts), `greeting`/`group_greeting` (greeting_audio), `outbound_contact_list` (contacts), `responsemanagement_responseasset` (response_assets), `architect_grammar_language` (language_files). Locked with `TestScan_FileOutputMetadata` covering the writer-func-only edge case (WritesFiles=true, CustomFileDirectory=""), plus a WritesFiles assertion added to the existing CX-2 fake_file_writer test.
 
 ### CX-6: BlockHash And BlockLabel Hints
 
 - Owner: `CX`
 - Priority: `P2`
-- Status: `Todo`
-- Files: `internal/scanner/provider/scanner.go`
+- Status: `Done`
+- Files: `internal/scanner/provider/scanner.go`, `internal/report/report.go`
 - Goal: Static-scan `QuickHashFields` and ResourceMeta label creation where practical.
 - Acceptance: Unknown BlockHash remains explicit instead of hidden.
+- Notes: `QuickHashFields` lives inside each exporter's `GetResourcesFunc` body, not on the `ResourceExporter` composite literal, so the scanner now extracts the wrapped function name from `GetResourcesFunc: provider.GetAllWithPooledClient(<funcName>)` (and the bare-ident form) and walks that function's body for either a `util.QuickHashFields(...)` call OR a `ResourceMeta{BlockHash: ...}` composite literal. Either match sets `BlockHashObserved = true`; anything else stays false. `report.WriteResource` prints the state explicitly as `Block hash: observed` or `Block hash: unknown (no static QuickHashFields call or ResourceMeta.BlockHash assignment found)` for every exporter, so the "unknown" case is loud instead of silent. Verified on live provider: 9 resources report `BlockHashObserved: true` — `user`, `integration`, `did_pool`, `flow`, `integration_action`, `externalcontacts_contact`, `knowledge_document`, `responsemanagement_response`, `responsemanagement_responseasset` — matching every direct `util.QuickHashFields` caller in the repo. Locked with `TestScan_BlockHashObserved` covering all three paths (util call, ResourceMeta assignment, and the "no hash" case that must remain explicit).
 
 ## Shared Board
 

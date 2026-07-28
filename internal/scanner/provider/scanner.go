@@ -24,13 +24,28 @@
 //	    - CustomFileWriter.SubDirectory -> CustomFileDirectory
 //	    - CustomAttributeResolver presence -> HasCustomResolvers
 //
+//	CX-3 (encoded reference graph)
+//	  EncodedRefAttrs is walked as a `map[*JsonEncodeRefAttr]*RefAttrSettings`
+//	  and flattened into (ContainerAttribute, NestedAttribute, RefType) tuples.
+//
+//	CX-5 (file-output metadata)
+//	  WritesFiles is set whenever the CustomFileWriter{} literal declares any
+//	  field (either a writer func or a SubDirectory). This mirrors the
+//	  runtime nil-check in tfexporter.customWriteAttributes.
+//
+//	CX-6 (block-hash hints)
+//	  The GetResourcesFunc value is followed to its function body in the same
+//	  package. If that body calls `util.QuickHashFields(...)` or assigns a
+//	  `BlockHash:` key on a `ResourceMeta{...}` literal, BlockHashObserved is
+//	  set to true. Otherwise it stays false so downstream tooling can flag
+//	  the resource as "unknown" instead of hiding it.
+//
 // RefType selectors that reference other provider packages
 // (e.g. `authDivision.ResourceType`) are resolved by looking up the referring
 // file's imports and consulting that other package's collected string
-// constants. Anything that cannot be resolved statically is left as the empty
-// string so downstream tooling can decide how to handle unknowns. Everything
-// beyond this (EncodedRefAttrs, ResourceMeta.BlockHash, etc.) is left for
-// CX-3, CX-5, and CX-6 to fill in.
+// constants. Anything that cannot be resolved statically is left as the
+// empty string / false so downstream tooling can decide how to handle
+// unknowns.
 package provider
 
 import (
@@ -153,7 +168,7 @@ type registrationRecord struct {
 }
 
 // exporterInfo mirrors the subset of resourceExporter.ResourceExporter fields
-// that CX-2 and CX-3 promise to expose.
+// that CX-2, CX-3, CX-5, and CX-6 promise to expose.
 type exporterInfo struct {
 	IsSingleton         bool
 	ExportID            string
@@ -162,7 +177,9 @@ type exporterInfo struct {
 	ExcludedAttributes  []string
 	ThirdPartyRefAttrs  []string
 	CustomFileDirectory string
+	WritesFiles         bool // CX-5: exporter has a populated CustomFileWriter{}
 	HasCustomResolvers  bool
+	BlockHashObserved   bool // CX-6: GetResourcesFunc computes a BlockHash
 }
 
 // ---------------------------------------------------------------------------
@@ -418,6 +435,7 @@ func extractExporterInfo(
 		fileImports:      funcRef.file.imports,
 		packagesByDir:    packages,
 		genesyscloudRoot: genesyscloudRoot,
+		currentPackage:   pkg,
 	}
 	return parseExporterCompositeLit(literal, ctx), true
 }
@@ -430,11 +448,24 @@ type resolveContext struct {
 	fileImports      map[string]string // alias -> full import path
 	packagesByDir    map[string]*packageInfo
 	genesyscloudRoot string
+	// currentPackage is the package whose exporter composite literal we are
+	// walking. CX-6 uses it to look up the GetResourcesFunc target in the
+	// same package's `funcs` map.
+	currentPackage *packageInfo
 }
 
-// findResourceExporterLiteral scans a function body for a
-// `return &<X>.ResourceExporter{...}` (or bare composite) and returns it.
+// findResourceExporterLiteral scans a function body for the exporter's
+// ResourceExporter composite literal. Two return shapes are supported:
+//
+//	return &<X>.ResourceExporter{...}                              (direct)
+//	<name> := &<X>.ResourceExporter{...}; ...; return <name>       (variable-first)
+//
+// The variable-first form covers architect_flow's dual-exporter pattern,
+// where the returned exporter is assigned to a local before being handed
+// back after side-effect calls (SetNewFlowResourceExporter, etc.).
 func findResourceExporterLiteral(body *ast.BlockStmt) (*ast.CompositeLit, bool) {
+	assignments := collectResourceExporterAssignments(body)
+
 	var found *ast.CompositeLit
 	ast.Inspect(body, func(n ast.Node) bool {
 		if found != nil {
@@ -451,17 +482,54 @@ func findResourceExporterLiteral(body *ast.BlockStmt) (*ast.CompositeLit, bool) 
 		if unary, ok := expr.(*ast.UnaryExpr); ok && unary.Op == token.AND {
 			expr = unary.X
 		}
-		lit, ok := expr.(*ast.CompositeLit)
+		if lit, ok := expr.(*ast.CompositeLit); ok && isResourceExporterType(lit.Type) {
+			found = lit
+			return false
+		}
+		if ident, ok := expr.(*ast.Ident); ok {
+			if lit, ok := assignments[ident.Name]; ok {
+				found = lit
+				return false
+			}
+		}
+		return true
+	})
+	return found, found != nil
+}
+
+// collectResourceExporterAssignments indexes every local variable in the
+// function body that is assigned a `&<X>.ResourceExporter{...}` composite
+// literal. Both `:=` (define) and `=` (assign) forms are captured so
+// findResourceExporterLiteral can follow `return <ident>` back to the
+// literal.
+func collectResourceExporterAssignments(body *ast.BlockStmt) map[string]*ast.CompositeLit {
+	assignments := map[string]*ast.CompositeLit{}
+	ast.Inspect(body, func(n ast.Node) bool {
+		assignStmt, ok := n.(*ast.AssignStmt)
 		if !ok {
 			return true
 		}
-		if !isResourceExporterType(lit.Type) {
+		if len(assignStmt.Lhs) != len(assignStmt.Rhs) {
 			return true
 		}
-		found = lit
-		return false
+		for i, rhs := range assignStmt.Rhs {
+			expr := rhs
+			if unary, ok := expr.(*ast.UnaryExpr); ok && unary.Op == token.AND {
+				expr = unary.X
+			}
+			lit, ok := expr.(*ast.CompositeLit)
+			if !ok || !isResourceExporterType(lit.Type) {
+				continue
+			}
+			lhsIdent, ok := assignStmt.Lhs[i].(*ast.Ident)
+			if !ok {
+				continue
+			}
+			assignments[lhsIdent.Name] = lit
+		}
+		return true
 	})
-	return found, found != nil
+	return assignments
 }
 
 // isResourceExporterType matches `X.ResourceExporter` type expressions. We
@@ -502,9 +570,22 @@ func parseExporterCompositeLit(lit *ast.CompositeLit, ctx resolveContext) *expor
 		case "ThirdPartyRefAttrs":
 			info.ThirdPartyRefAttrs = parseStringSlice(keyValue.Value, ctx)
 		case "CustomFileWriter":
-			info.CustomFileDirectory = parseCustomFileWriterSubDir(keyValue.Value, ctx)
+			// CX-5: capture both the SubDirectory string and a semantic
+			// "this exporter writes files" flag. WritesFiles is true whenever
+			// the CustomFileWriter literal declares any field (either the
+			// writer func or a SubDirectory), which is the same signal that
+			// tfexporter uses at runtime to decide whether to invoke the
+			// writer func.
+			info.CustomFileDirectory, info.WritesFiles = parseCustomFileWriter(keyValue.Value, ctx)
 		case "CustomAttributeResolver":
 			info.HasCustomResolvers = compositeLitHasEntries(keyValue.Value)
+		case "GetResourcesFunc":
+			// CX-6: extract the wrapped function name so we can walk its
+			// body (in the second pass) for util.QuickHashFields() calls
+			// and ResourceMeta{BlockHash: ...} literals.
+			if funcName := extractGetResourcesFuncName(keyValue.Value); funcName != "" {
+				info.BlockHashObserved = getResourcesFuncObservesBlockHash(funcName, ctx)
+			}
 		}
 	}
 	return info
@@ -684,12 +765,22 @@ func parseStringSlice(expr ast.Expr, ctx resolveContext) []string {
 	return out
 }
 
-// parseCustomFileWriterSubDir digs the SubDirectory field out of a
-// `CustomFileWriterSettings{...}` composite literal.
-func parseCustomFileWriterSubDir(expr ast.Expr, ctx resolveContext) string {
+// parseCustomFileWriter digs the SubDirectory field out of a
+// `CustomFileWriterSettings{...}` composite literal and also reports
+// whether the literal declares any field at all. A non-empty literal is
+// what tfexporter treats as "this exporter writes files" — that's the
+// CX-5 signal we surface as WritesFiles on ProviderResource.
+func parseCustomFileWriter(expr ast.Expr, ctx resolveContext) (subDirectory string, writesFiles bool) {
 	lit, ok := expr.(*ast.CompositeLit)
 	if !ok {
-		return ""
+		return "", false
+	}
+	// If the literal has any populated field (SubDirectory or
+	// RetrieveAndWriteFilesFunc), the exporter writes files. An empty
+	// CustomFileWriter{} literal is treated as "no file writer configured",
+	// which mirrors the runtime nil-check in tfexporter.
+	if len(lit.Elts) > 0 {
+		writesFiles = true
 	}
 	for _, elt := range lit.Elts {
 		keyValue, ok := elt.(*ast.KeyValueExpr)
@@ -701,10 +792,121 @@ func parseCustomFileWriterSubDir(expr ast.Expr, ctx resolveContext) string {
 			continue
 		}
 		if keyIdent.Name == "SubDirectory" {
-			return resolveStringExpr(keyValue.Value, ctx)
+			subDirectory = resolveStringExpr(keyValue.Value, ctx)
 		}
 	}
+	return subDirectory, writesFiles
+}
+
+// extractGetResourcesFuncName pulls the name of the function that supplies
+// the exporter's GetResourcesFunc value. The provider consistently spells
+// this one of two ways:
+//
+//	GetResourcesFunc: provider.GetAllWithPooledClient(getAllFoo),
+//	GetResourcesFunc: getAllFoo,
+//
+// The second form is rare but real. Cross-package references
+// (`otherpkg.GetAllFoo`) are skipped because CX-6 only walks bodies of
+// funcs declared in the same package as the exporter.
+func extractGetResourcesFuncName(expr ast.Expr) string {
+	switch node := expr.(type) {
+	case *ast.CallExpr:
+		if len(node.Args) == 0 {
+			return ""
+		}
+		if ident, ok := node.Args[0].(*ast.Ident); ok {
+			return ident.Name
+		}
+	case *ast.Ident:
+		return node.Name
+	}
 	return ""
+}
+
+// getResourcesFuncObservesBlockHash returns true if the named function in
+// the current package computes a per-resource BlockHash via either
+// `util.QuickHashFields(...)` or by directly assigning a `BlockHash:` key
+// on a `ResourceMeta` composite literal. This is CX-6's "explicit hint"
+// signal: when the function is present but no hash logic is seen, the
+// caller reports BlockHashObserved=false so downstream tooling can flag
+// the resource as "unknown" rather than assuming a stable hash exists.
+func getResourcesFuncObservesBlockHash(funcName string, ctx resolveContext) bool {
+	if ctx.currentPackage == nil {
+		return false
+	}
+	target, ok := ctx.currentPackage.funcs[funcName]
+	if !ok || target.decl.Body == nil {
+		return false
+	}
+	observed := false
+	ast.Inspect(target.decl.Body, func(n ast.Node) bool {
+		if observed {
+			return false
+		}
+		switch node := n.(type) {
+		case *ast.CallExpr:
+			if callSelectorMatches(node.Fun, "QuickHashFields") ||
+				callSelectorMatches(node.Fun, "QuickHashFieldsWithDefault") {
+				observed = true
+				return false
+			}
+		case *ast.CompositeLit:
+			if isResourceMetaType(node.Type) && compositeLitHasKey(node, "BlockHash") {
+				observed = true
+				return false
+			}
+		}
+		return true
+	})
+	return observed
+}
+
+// callSelectorMatches reports whether an expression is a selector call
+// `<something>.<methodName>` (e.g. `util.QuickHashFields`). Bare-identifier
+// calls to the same name are also matched so in-package aliasing is
+// handled.
+func callSelectorMatches(fun ast.Expr, methodName string) bool {
+	switch node := fun.(type) {
+	case *ast.SelectorExpr:
+		return node.Sel != nil && node.Sel.Name == methodName
+	case *ast.Ident:
+		return node.Name == methodName
+	}
+	return false
+}
+
+// isResourceMetaType reports whether a composite literal's type expression
+// resolves to `ResourceMeta` (bare or `<alias>.ResourceMeta`). The
+// scanner does not attempt to verify the alias's target package — the
+// method name is distinctive enough within the provider that false
+// positives are effectively impossible.
+func isResourceMetaType(expr ast.Expr) bool {
+	switch node := expr.(type) {
+	case *ast.Ident:
+		return node.Name == "ResourceMeta"
+	case *ast.SelectorExpr:
+		return node.Sel != nil && node.Sel.Name == "ResourceMeta"
+	}
+	return false
+}
+
+// compositeLitHasKey reports whether a struct-style composite literal
+// declares a value for a given field name.
+func compositeLitHasKey(lit *ast.CompositeLit, keyName string) bool {
+	for _, elt := range lit.Elts {
+		keyValue, ok := elt.(*ast.KeyValueExpr)
+		if !ok {
+			continue
+		}
+		keyIdent, ok := keyValue.Key.(*ast.Ident)
+		if !ok {
+			continue
+		}
+		if keyIdent.Name == keyName {
+			return true
+		}
+	}
+	return false
 }
 
 // compositeLitHasEntries reports whether the value is a composite literal
@@ -817,7 +1019,9 @@ func buildProviderResources(records map[string]*registrationRecord) []model.Prov
 			resource.ExcludedAttributes = record.exporter.ExcludedAttributes
 			resource.ThirdPartyRefAttrs = record.exporter.ThirdPartyRefAttrs
 			resource.CustomFileDirectory = record.exporter.CustomFileDirectory
+			resource.WritesFiles = record.exporter.WritesFiles
 			resource.HasCustomResolvers = record.exporter.HasCustomResolvers
+			resource.BlockHashObserved = record.exporter.BlockHashObserved
 		}
 		resources = append(resources, resource)
 	}

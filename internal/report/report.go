@@ -3,8 +3,10 @@ package report
 import (
 	"fmt"
 	"io"
+	"strings"
 
 	"compatibility-lab/internal/matrix"
+	"compatibility-lab/internal/model"
 )
 
 func WriteTable(w io.Writer, report matrix.CompatibilityReport) error {
@@ -46,6 +48,12 @@ func WriteResource(w io.Writer, resource matrix.ResourceReadiness) error {
 		if _, err := fmt.Fprintf(w, "Provider exporter: %t\n", resource.Provider.HasExporter); err != nil {
 			return err
 		}
+		if err := writeFileOutput(w, resource.Provider); err != nil {
+			return err
+		}
+		if err := writeBlockHash(w, resource.Provider); err != nil {
+			return err
+		}
 	}
 	if resource.MRMO != nil {
 		if _, err := fmt.Fprintf(w, "MRMO tier: %d\n", resource.MRMO.Tier); err != nil {
@@ -63,6 +71,48 @@ func WriteResource(w io.Writer, resource matrix.ResourceReadiness) error {
 		}
 	}
 	return nil
+}
+
+// writeFileOutput surfaces CX-5's file-output metadata in explain output.
+// The block is printed whenever the exporter writes files or declares
+// third-party file references, so flow / user-prompt / script-style
+// resources show their output behavior explicitly instead of being
+// silently indistinguishable from a plain resource.
+func writeFileOutput(w io.Writer, provider *model.ProviderResource) error {
+	if !provider.WritesFiles && len(provider.ThirdPartyRefAttrs) == 0 {
+		return nil
+	}
+	if _, err := fmt.Fprintf(w, "Writes files: %t\n", provider.WritesFiles); err != nil {
+		return err
+	}
+	if provider.CustomFileDirectory != "" {
+		if _, err := fmt.Fprintf(w, "Output sub-directory: %s\n", provider.CustomFileDirectory); err != nil {
+			return err
+		}
+	}
+	if len(provider.ThirdPartyRefAttrs) > 0 {
+		if _, err := fmt.Fprintf(w, "Third-party ref attributes: %s\n", strings.Join(provider.ThirdPartyRefAttrs, ", ")); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// writeBlockHash surfaces CX-6's BlockHash observation. The status is
+// spelled out either way — "observed" or "unknown (no static
+// QuickHashFields call)" — so a missing hash is loud rather than hidden.
+// The line is only printed when the resource has an exporter; without one
+// the field is not meaningful.
+func writeBlockHash(w io.Writer, provider *model.ProviderResource) error {
+	if !provider.HasExporter {
+		return nil
+	}
+	status := "unknown (no static QuickHashFields call or ResourceMeta.BlockHash assignment found)"
+	if provider.BlockHashObserved {
+		status = "observed"
+	}
+	_, err := fmt.Fprintf(w, "Block hash: %s\n", status)
+	return err
 }
 
 func WriteDependencies(w io.Writer, dependencies []matrix.DependencyReadiness) error {

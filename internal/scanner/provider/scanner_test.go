@@ -109,6 +109,9 @@ func TestScan_ExtractsExporterMetadata(t *testing.T) {
 		t.Errorf("fake_file_writer.CustomFileDirectory = %q, want %q",
 			fileWriter.CustomFileDirectory, "audio_prompts")
 	}
+	if !fileWriter.WritesFiles {
+		t.Errorf("fake_file_writer.WritesFiles = false, want true (CX-5: populated CustomFileWriter{})")
+	}
 	wantThirdParty := []string{"resources.filename", "resources.file_content_hash"}
 	if !stringSlicesEqual(fileWriter.ThirdPartyRefAttrs, wantThirdParty) {
 		t.Errorf("fake_file_writer.ThirdPartyRefAttrs = %v, want %v",
@@ -116,6 +119,88 @@ func TestScan_ExtractsExporterMetadata(t *testing.T) {
 	}
 	if fileWriter.HasCustomResolvers {
 		t.Errorf("fake_file_writer.HasCustomResolvers = true; empty resolver map should not count")
+	}
+}
+
+// TestScan_FileOutputMetadata is the CX-5 anchor test. It confirms that
+// WritesFiles is set whenever the CustomFileWriter literal declares any
+// field — not just SubDirectory. This matches the runtime semantics where
+// tfexporter checks for a non-nil RetrieveAndWriteFilesFunc and does not
+// care whether SubDirectory is populated.
+func TestScan_FileOutputMetadata(t *testing.T) {
+	repo := t.TempDir()
+	writeFakeProvider(t, repo)
+
+	manifest, err := Scan(repo)
+	if err != nil {
+		t.Fatalf("Scan returned error: %v", err)
+	}
+	byType := indexByType(manifest.Resources)
+
+	// Writer-func only: no SubDirectory, but WritesFiles is still true
+	// because the CustomFileWriter{} literal declares a field.
+	funcOnly, ok := byType["genesyscloud_fake_writer_func_only"]
+	if !ok {
+		t.Fatal("genesyscloud_fake_writer_func_only missing from manifest")
+	}
+	if !funcOnly.WritesFiles {
+		t.Errorf("fake_writer_func_only.WritesFiles = false, want true")
+	}
+	if funcOnly.CustomFileDirectory != "" {
+		t.Errorf("fake_writer_func_only.CustomFileDirectory = %q, want empty",
+			funcOnly.CustomFileDirectory)
+	}
+
+	// Resources without a CustomFileWriter literal do not write files.
+	full, ok := byType["genesyscloud_fake_full"]
+	if !ok {
+		t.Fatal("genesyscloud_fake_full missing from manifest")
+	}
+	if full.WritesFiles {
+		t.Errorf("fake_full.WritesFiles = true, want false (no CustomFileWriter declared)")
+	}
+}
+
+// TestScan_BlockHashObserved is the CX-6 anchor test. It confirms three
+// things:
+//
+//   - a GetResourcesFunc that calls util.QuickHashFields(...) is detected;
+//   - a GetResourcesFunc that assigns BlockHash on a ResourceMeta literal
+//     is also detected;
+//   - a GetResourcesFunc whose body does neither leaves BlockHashObserved
+//     false so the "unknown" state is loud instead of silent.
+func TestScan_BlockHashObserved(t *testing.T) {
+	repo := t.TempDir()
+	writeFakeProvider(t, repo)
+
+	manifest, err := Scan(repo)
+	if err != nil {
+		t.Fatalf("Scan returned error: %v", err)
+	}
+	byType := indexByType(manifest.Resources)
+
+	viaUtil, ok := byType["genesyscloud_fake_hash_via_util"]
+	if !ok {
+		t.Fatal("genesyscloud_fake_hash_via_util missing from manifest")
+	}
+	if !viaUtil.BlockHashObserved {
+		t.Errorf("fake_hash_via_util.BlockHashObserved = false, want true (util.QuickHashFields present)")
+	}
+
+	viaMeta, ok := byType["genesyscloud_fake_hash_via_meta"]
+	if !ok {
+		t.Fatal("genesyscloud_fake_hash_via_meta missing from manifest")
+	}
+	if !viaMeta.BlockHashObserved {
+		t.Errorf("fake_hash_via_meta.BlockHashObserved = false, want true (ResourceMeta.BlockHash assigned)")
+	}
+
+	none, ok := byType["genesyscloud_fake_hash_none"]
+	if !ok {
+		t.Fatal("genesyscloud_fake_hash_none missing from manifest")
+	}
+	if none.BlockHashObserved {
+		t.Errorf("fake_hash_none.BlockHashObserved = true, want false (unknown must stay explicit)")
 	}
 }
 
@@ -299,6 +384,133 @@ func FakeFileWriterExporter() *resourceExporter.ResourceExporter {
 			"resources.file_content_hash",
 		},
 		CustomAttributeResolver: map[string]*resourceExporter.RefAttrCustomResolver{},
+	}
+}
+`,
+		// File-writer resource that only sets the writer func (no
+		// SubDirectory). CX-5 must still report WritesFiles=true because
+		// the CustomFileWriter{} literal declares a field. Runtime
+		// tfexporter uses the func-nil check, not SubDirectory.
+		"genesyscloud/fake_writer_func_only/schema.go": `package fake_writer_func_only
+
+import (
+	registrar "example.com/registrar"
+	resourceExporter "example.com/resource_exporter"
+)
+
+const ResourceType = "genesyscloud_fake_writer_func_only"
+
+func writerFunc(a, b, c string, d map[string]interface{}, e interface{}, f resourceExporter.ResourceInfo) error {
+	return nil
+}
+
+func SetRegistrar(regInstance registrar.Registrar) {
+	regInstance.RegisterResource(ResourceType, nil)
+	regInstance.RegisterExporter(ResourceType, FakeWriterFuncOnlyExporter())
+}
+
+func FakeWriterFuncOnlyExporter() *resourceExporter.ResourceExporter {
+	return &resourceExporter.ResourceExporter{
+		CustomFileWriter: resourceExporter.CustomFileWriterSettings{
+			RetrieveAndWriteFilesFunc: writerFunc,
+		},
+	}
+}
+`,
+		// CX-6: GetResourcesFunc wraps a package-local func that calls
+		// util.QuickHashFields, matching the pattern in genesyscloud_user,
+		// genesyscloud_integration, etc. Verifies the CX-6 walk follows
+		// provider.GetAllWithPooledClient(...) and pattern-matches on the
+		// util call's method name.
+		"genesyscloud/fake_hash_via_util/schema.go": `package fake_hash_via_util
+
+import (
+	registrar "example.com/registrar"
+	resourceExporter "example.com/resource_exporter"
+	provider "example.com/provider"
+	util "example.com/util"
+)
+
+const ResourceType = "genesyscloud_fake_hash_via_util"
+
+func getAllHashed(ctx interface{}) (resourceExporter.ResourceIDMetaMap, error) {
+	hash, _ := util.QuickHashFields("a", "b")
+	_ = hash
+	return nil, nil
+}
+
+func SetRegistrar(regInstance registrar.Registrar) {
+	regInstance.RegisterResource(ResourceType, nil)
+	regInstance.RegisterExporter(ResourceType, FakeHashViaUtilExporter())
+}
+
+func FakeHashViaUtilExporter() *resourceExporter.ResourceExporter {
+	return &resourceExporter.ResourceExporter{
+		GetResourcesFunc: provider.GetAllWithPooledClient(getAllHashed),
+	}
+}
+`,
+		// CX-6: GetResourcesFunc is a bare identifier and the body
+		// assigns BlockHash on a ResourceMeta composite literal. This
+		// exercises both the bare-ident branch of extractGetResourcesFuncName
+		// and the ResourceMeta compositeLit branch of the walker.
+		"genesyscloud/fake_hash_via_meta/schema.go": `package fake_hash_via_meta
+
+import (
+	registrar "example.com/registrar"
+	resourceExporter "example.com/resource_exporter"
+)
+
+const ResourceType = "genesyscloud_fake_hash_via_meta"
+
+func getAllViaMeta(ctx interface{}) (resourceExporter.ResourceIDMetaMap, error) {
+	resources := map[string]*resourceExporter.ResourceMeta{}
+	resources["x"] = &resourceExporter.ResourceMeta{
+		BlockLabel: "some-label",
+		BlockHash:  "abc123",
+	}
+	return resources, nil
+}
+
+func SetRegistrar(regInstance registrar.Registrar) {
+	regInstance.RegisterResource(ResourceType, nil)
+	regInstance.RegisterExporter(ResourceType, FakeHashViaMetaExporter())
+}
+
+func FakeHashViaMetaExporter() *resourceExporter.ResourceExporter {
+	return &resourceExporter.ResourceExporter{
+		GetResourcesFunc: getAllViaMeta,
+	}
+}
+`,
+		// CX-6: GetResourcesFunc is present but the body does not call
+		// QuickHashFields and does not populate BlockHash. The scanner
+		// MUST leave BlockHashObserved false so downstream tooling can
+		// flag the resource as "unknown" instead of hiding it.
+		"genesyscloud/fake_hash_none/schema.go": `package fake_hash_none
+
+import (
+	registrar "example.com/registrar"
+	resourceExporter "example.com/resource_exporter"
+	provider "example.com/provider"
+)
+
+const ResourceType = "genesyscloud_fake_hash_none"
+
+func getAllPlain(ctx interface{}) (resourceExporter.ResourceIDMetaMap, error) {
+	resources := map[string]*resourceExporter.ResourceMeta{}
+	resources["x"] = &resourceExporter.ResourceMeta{BlockLabel: "just-a-label"}
+	return resources, nil
+}
+
+func SetRegistrar(regInstance registrar.Registrar) {
+	regInstance.RegisterResource(ResourceType, nil)
+	regInstance.RegisterExporter(ResourceType, FakeHashNoneExporter())
+}
+
+func FakeHashNoneExporter() *resourceExporter.ResourceExporter {
+	return &resourceExporter.ResourceExporter{
+		GetResourcesFunc: provider.GetAllWithPooledClient(getAllPlain),
 	}
 }
 `,
