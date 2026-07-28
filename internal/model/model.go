@@ -17,6 +17,7 @@ type ProviderResource struct {
 	ExcludedAttributes  []string         `json:"excludedAttributes,omitempty"`
 	ThirdPartyRefAttrs  []string         `json:"thirdPartyRefAttrs,omitempty"`
 	CustomFileDirectory string           `json:"customFileDirectory,omitempty"`
+	WritesFiles         bool             `json:"writesFiles"`
 	HasCustomResolvers  bool             `json:"hasCustomResolvers"`
 	BlockHashObserved   bool             `json:"blockHashObserved"`
 }
