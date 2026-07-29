@@ -126,14 +126,14 @@ Deliver an offline CLI that scans both repos, joins provider exporter metadata w
 
 ## Shared Board
 
-### LAB-1: Replace Sample Data With Real Scanner Output
+<!-- ### LAB-1: Replace Sample Data With Real Scanner Output
 
 - Owner: `Shared`
 - Priority: `P0`
 - Status: `Todo`
 - Files: `internal/scanner/mrmo/scanner.go`, `internal/scanner/provider/scanner.go`
 - Goal: Remove the hardcoded `routing-queue` sample once both scanners return real manifests.
-- Acceptance: `make scan` reports actual local repo data.
+- Acceptance: `make scan` reports actual local repo data. -->
 
 ### LAB-2: Improve Matrix Scoring
 
@@ -162,14 +162,14 @@ Deliver an offline CLI that scans both repos, joins provider exporter metadata w
 - Goal: Add markdown output grouped by blockers, warnings, and ready resources.
 - Acceptance: `scan --format markdown` produces PR-friendly output.
 
-### LAB-5: Golden Fixture Tests
+<!-- ### LAB-5: Golden Fixture Tests
 
 - Owner: `Shared`
 - Priority: `P1`
 - Status: `Todo`
 - Files: `testdata/fixtures/`, scanner tests, matrix tests
 - Goal: Add small fixture snapshots for MRMO and provider metadata.
-- Acceptance: `go test ./...` catches scanner and report regressions.
+- Acceptance: `go test ./...` catches scanner and report regressions. -->
 
 ### LAB-6: Demo Scenarios
 
@@ -189,14 +189,14 @@ Deliver an offline CLI that scans both repos, joins provider exporter metadata w
 - Goal: Compare provider metadata snapshots across git refs.
 - Acceptance: Removed exporter or changed `RefAttrs` on an MRMO-supported resource is flagged as high risk.
 
-### LAB-8: Roundtrip Prototype
+<!-- ### LAB-8: Roundtrip Prototype
 
 - Owner: `Shared`
 - Priority: `P2`
 - Status: `Todo`
 - Files: new `internal/roundtrip/`
 - Goal: Prototype mocked export/source-target drift comparison.
-- Acceptance: Roundtrip can compare two exported JSON fixtures and show normalized drift.
+- Acceptance: Roundtrip can compare two exported JSON fixtures and show normalized drift. -->
 
 ## Suggested First Pulls
 
@@ -208,6 +208,6 @@ Deliver an offline CLI that scans both repos, joins provider exporter metadata w
 
 - `cmd/compatibility-lab/main.go` exists with planned commands.
 - `internal/model` contains initial report structs.
-- `internal/scanner/mrmo` and `internal/scanner/provider` exist as implementation slots.
-- `internal/matrix` joins sample scanner output.
+- `internal/scanner/mrmo` and `internal/scanner/provider` emit real manifests from local repos.
+- `internal/matrix` joins scanner output into readiness statuses.
 - `internal/report` prints table, explain, and dependency output.

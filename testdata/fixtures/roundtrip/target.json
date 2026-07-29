@@ -1,0 +1,30 @@
+{
+  "resource": {
+    "genesyscloud_routing_queue": {
+      "support": {
+        "name": "Support",
+        "acw_wrapup_prompt": "OPTIONAL",
+        "auto_answer_only": false,
+        "division_id": "div-target-9",
+        "id": "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+        "self_uri": "/api/v2/routing/queues/aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
+      },
+      "billing": {
+        "name": "Billing",
+        "acw_wrapup_prompt": "MANDATORY_TIMEOUT",
+        "auto_answer_only": false,
+        "division_id": "div-target-9",
+        "id": "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb",
+        "self_uri": "/api/v2/routing/queues/bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"
+      }
+    },
+    "genesyscloud_auth_division": {
+      "home": {
+        "name": "Home",
+        "description": "Default division",
+        "id": "div-target-9",
+        "self_uri": "/api/v2/authorization/divisions/div-target-9"
+      }
+    }
+  }
+}
