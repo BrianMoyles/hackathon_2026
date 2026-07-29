@@ -31,7 +31,7 @@ go run ./cmd/compatibility-lab scan \
 - `explain <resourceTypeOrRef>`: show why a resource is ready, risky, or blocked.
 - `dependency-closure <resourceTypeOrRef>`: show exporter dependencies and MRMO support.
 - `diff-provider-pr`: planned provider metadata diff command.
-- `roundtrip`: planned export/apply/export drift test.
+- `roundtrip`: mock compare of source/target export JSON fixtures with normalized drift.
 
 ## Work Board
 
@@ -39,5 +39,9 @@ Use `TODO.md` as the lightweight Jira board for MRMO, CX as Code, and shared tas
 
 ## Current State
 
-This is a scaffold. The scanners currently return a small `routing-queue` sample so the
-CLI can be run while the MRMO and CX scanner implementations are filled in.
+Both scanners read local checkouts and emit real manifests:
+
+- Provider: registration + exporter metadata from `terraform-provider-genesyscloud`
+- MRMO: registry, topics, hierarchy, handler factories, and integration-test coverage from `mrmo-replicator`
+
+`make scan` joins those into a compatibility matrix (ready / warning / blocked).

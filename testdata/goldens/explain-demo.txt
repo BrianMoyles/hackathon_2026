@@ -1,0 +1,36 @@
+genesyscloud_routing_queue
+MRMO ref: routing-queue
+Status: unknown
+Score: 60
+Provider exporter: true
+Block hash: unknown (no static QuickHashFields call or ResourceMeta.BlockHash assignment found)
+MRMO tier: 4
+Reconciliation eligible: true
+Integration tests: covered
+Topic: AssignmentQueueConfigurationChange -> AssignmentQueueConfigurationHandler
+unknown: PROVIDER_BLOCK_HASH_UNKNOWN - no static QuickHashFields call or ResourceMeta.BlockHash assignment was found; hash stability cannot be confirmed
+---
+genesyscloud_flow
+MRMO ref: architect-flow
+Status: warning
+Score: 70
+Provider exporter: true
+Writes files: true
+Output sub-directory: flows
+Third-party ref attributes: filepath
+Block hash: unknown (no static QuickHashFields call or ResourceMeta.BlockHash assignment found)
+MRMO tier: 4
+Reconciliation eligible: true
+Integration tests: missing
+Topic: ArchitectObjectNotification -> ArchitectFlowHandler
+warning: MRMO_INTEGRATION_TEST_MISSING - resource has no handler integration test coverage
+unknown: PROVIDER_BLOCK_HASH_UNKNOWN - no static QuickHashFields call or ResourceMeta.BlockHash assignment was found; hash stability cannot be confirmed
+---
+genesyscloud_blocked_only
+Status: blocked
+Score: 0
+Provider exporter: true
+Block hash: unknown (no static QuickHashFields call or ResourceMeta.BlockHash assignment found)
+blocker: MRMO_REGISTRY_MISSING - resource is not registered as MRMO-supported
+unknown: PROVIDER_BLOCK_HASH_UNKNOWN - no static QuickHashFields call or ResourceMeta.BlockHash assignment was found; hash stability cannot be confirmed
+---

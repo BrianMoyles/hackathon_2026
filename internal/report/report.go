@@ -28,6 +28,18 @@ func WriteTable(w io.Writer, report matrix.CompatibilityReport) error {
 			return err
 		}
 	}
+	if _, err := fmt.Fprintf(
+		w,
+		"\nSummary: %d ready, %d warning, %d unknown, %d blocked (of %d provider resources / %d MRMO resources)\n",
+		report.Summary.ReadyCount,
+		report.Summary.WarningCount,
+		report.Summary.UnknownCount,
+		report.Summary.BlockedCount,
+		report.Summary.ProviderResourceCount,
+		report.Summary.MRMOResourceCount,
+	); err != nil {
+		return err
+	}
 	return nil
 }
 

@@ -8,6 +8,7 @@ import (
 
 	"compatibility-lab/internal/matrix"
 	"compatibility-lab/internal/report"
+	"compatibility-lab/internal/roundtrip"
 	"compatibility-lab/internal/scanner/mrmo"
 	"compatibility-lab/internal/scanner/provider"
 )
@@ -32,7 +33,7 @@ func main() {
 	case "diff-provider-pr":
 		err = notImplemented("diff-provider-pr", "compare provider exporter metadata between two git refs")
 	case "roundtrip":
-		err = notImplemented("roundtrip", "export, apply or mock-replicate, re-export, and compare drift")
+		err = runRoundtrip(os.Args[2:])
 	case "help", "-h", "--help":
 		usage()
 	default:
@@ -50,6 +51,7 @@ func runScan(args []string) error {
 	providerRepo := fs.String("provider-repo", defaultProviderRepo, "path to terraform-provider-genesyscloud")
 	mrmoRepo := fs.String("mrmo-repo", defaultMRMORepo, "path to mrmo-replicator")
 	format := fs.String("format", "table", "output format: table or json")
+	strict := fs.Bool("strict", false, "exit non-zero when any resource is blocked (warnings and unknowns stay report-only)")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -64,7 +66,18 @@ func runScan(args []string) error {
 	}
 
 	compatibilityReport := matrix.Build(providerManifest, mrmoManifest)
-	return writeReport(compatibilityReport, *format)
+	if err := writeReport(compatibilityReport, *format); err != nil {
+		return err
+	}
+
+	// LAB-2: --strict flips a green run into a red one when any resource is
+	// blocked. Warnings and unknowns still surface in the report but do not
+	// fail the exit code, so CI can be strict about blockers without
+	// getting drowned in noise from static-analysis "unknowns".
+	if *strict && compatibilityReport.HasStrictFailures() {
+		return fmt.Errorf("strict mode: %d blocked resource(s) found", compatibilityReport.Summary.BlockedCount)
+	}
+	return nil
 }
 
 func runExplain(args []string) error {
@@ -115,6 +128,38 @@ func runDependencyClosure(args []string) error {
 	return report.WriteDependencies(os.Stdout, closure)
 }
 
+func runRoundtrip(args []string) error {
+	fs := flag.NewFlagSet("roundtrip", flag.ExitOnError)
+	source := fs.String("source", "testdata/fixtures/roundtrip/source.json", "source export JSON fixture")
+	target := fs.String("target", "testdata/fixtures/roundtrip/target.json", "target export JSON fixture")
+	resourceType := fs.String("resource", "", "optional Terraform resource type filter")
+	format := fs.String("format", "table", "output format: table or json")
+	mode := fs.String("mode", "mock", "roundtrip mode (only mock is implemented)")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	if *mode != "mock" {
+		return fmt.Errorf("unsupported roundtrip mode %q (only mock is implemented)", *mode)
+	}
+
+	driftReport, err := roundtrip.CompareFiles(*source, *target, *resourceType)
+	if err != nil {
+		return err
+	}
+
+	switch *format {
+	case "table":
+		fmt.Print(roundtrip.FormatTable(driftReport))
+		return nil
+	case "json":
+		encoder := json.NewEncoder(os.Stdout)
+		encoder.SetIndent("", "  ")
+		return encoder.Encode(driftReport)
+	default:
+		return fmt.Errorf("unsupported format %q", *format)
+	}
+}
+
 func writeReport(compatibilityReport matrix.CompatibilityReport, format string) error {
 	switch format {
 	case "table":
@@ -137,10 +182,10 @@ func usage() {
 	fmt.Print(`MRMO / CX as Code Compatibility Lab
 
 Usage:
-  compatibility-lab scan [--provider-repo path] [--mrmo-repo path] [--format table|json]
+  compatibility-lab scan [--provider-repo path] [--mrmo-repo path] [--format table|json] [--strict]
   compatibility-lab explain <resourceTypeOrRef>
   compatibility-lab dependency-closure <resourceTypeOrRef>
   compatibility-lab diff-provider-pr
-  compatibility-lab roundtrip
+  compatibility-lab roundtrip [--mode mock] [--source path] [--target path] [--resource type] [--format table|json]
 `)
 }

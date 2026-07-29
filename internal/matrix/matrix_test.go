@@ -338,3 +338,261 @@ func containsCode(codes []string, want string) bool {
 	}
 	return false
 }
+
+// TestBuild_StatusPrecedence is the LAB-2 anchor test for status
+// classification. It builds four synthetic resources that each hit
+// exactly one severity tier and asserts the resulting Status +
+// UnknownCount tally are what LAB-2 promises:
+//
+//	blocked > warning > unknown > ready
+//
+// A fifth "stacked" resource picks up an unknown AND a blocker in the
+// same run to verify the precedence never demotes: the final Status
+// stays blocked even though addUnknown fired first.
+func TestBuild_StatusPrecedence(t *testing.T) {
+	providerManifest := model.ProviderManifest{
+		Resources: []model.ProviderResource{
+			// ready: exportable, hash observed, no unresolved refs.
+			{
+				TerraformType:     "genesyscloud_ready",
+				HasResource:       true,
+				HasExporter:       true,
+				BlockHashObserved: true,
+			},
+			// warning: exportable + hash observed, but MRMO says the
+			// resource is not reconciliation-eligible.
+			{
+				TerraformType:     "genesyscloud_warning",
+				HasResource:       true,
+				HasExporter:       true,
+				BlockHashObserved: true,
+			},
+			// unknown: exportable but the scanner could not resolve
+			// one of its RefAttrs statically.
+			{
+				TerraformType:     "genesyscloud_unknown",
+				HasResource:       true,
+				HasExporter:       true,
+				BlockHashObserved: true,
+				RefAttrs: []model.RefAttr{
+					{Attribute: "orphan_id", RefType: ""},
+				},
+			},
+			// blocked: singleton without an ExportID (CX-4 blocker).
+			{
+				TerraformType:     "genesyscloud_blocked",
+				HasResource:       true,
+				HasExporter:       true,
+				BlockHashObserved: true,
+				IsSingleton:       true,
+			},
+			// stacked: hits an unknown signal AND a blocker in the
+			// same Build. Final Status must stay blocked.
+			{
+				TerraformType: "genesyscloud_stacked",
+				HasResource:   true,
+				HasExporter:   true,
+				IsSingleton:   true,
+				RefAttrs: []model.RefAttr{
+					{Attribute: "orphan_id", RefType: ""},
+				},
+			},
+		},
+	}
+	readyMRMO := model.MRMOResource{
+		TerraformType:          "genesyscloud_ready",
+		HandlerRegistered:      true,
+		ReconciliationEligible: true,
+		IntegrationTestStatus:  "covered",
+		Topics:                 []model.TopicEntry{{Topic: "T", Handler: "H"}},
+	}
+	warnMRMO := readyMRMO
+	warnMRMO.TerraformType = "genesyscloud_warning"
+	warnMRMO.ReconciliationEligible = false
+	unknownMRMO := readyMRMO
+	unknownMRMO.TerraformType = "genesyscloud_unknown"
+	blockedMRMO := readyMRMO
+	blockedMRMO.TerraformType = "genesyscloud_blocked"
+	stackedMRMO := readyMRMO
+	stackedMRMO.TerraformType = "genesyscloud_stacked"
+
+	report := Build(providerManifest, model.MRMOManifest{
+		Resources: []model.MRMOResource{readyMRMO, warnMRMO, unknownMRMO, blockedMRMO, stackedMRMO},
+	})
+	byStatus := map[string]string{}
+	for _, r := range report.Resources {
+		byStatus[r.TerraformType] = r.Status
+	}
+
+	cases := map[string]string{
+		"genesyscloud_ready":   "ready",
+		"genesyscloud_warning": "warning",
+		"genesyscloud_unknown": "unknown",
+		"genesyscloud_blocked": "blocked",
+		"genesyscloud_stacked": "blocked",
+	}
+	for terraformType, wantStatus := range cases {
+		if got := byStatus[terraformType]; got != wantStatus {
+			t.Errorf("%s Status = %q, want %q", terraformType, got, wantStatus)
+		}
+	}
+
+	// Summary counts must match — the stacked resource is blocked, not
+	// unknown, so only one resource should land in the unknown bucket.
+	if report.Summary.ReadyCount != 1 {
+		t.Errorf("Summary.ReadyCount = %d, want 1", report.Summary.ReadyCount)
+	}
+	if report.Summary.WarningCount != 1 {
+		t.Errorf("Summary.WarningCount = %d, want 1", report.Summary.WarningCount)
+	}
+	if report.Summary.UnknownCount != 1 {
+		t.Errorf("Summary.UnknownCount = %d, want 1", report.Summary.UnknownCount)
+	}
+	if report.Summary.BlockedCount != 2 {
+		t.Errorf("Summary.BlockedCount = %d, want 2", report.Summary.BlockedCount)
+	}
+
+	// --strict must trip on any blocked resource.
+	if !report.HasStrictFailures() {
+		t.Errorf("HasStrictFailures() = false, want true (report has %d blocked)", report.Summary.BlockedCount)
+	}
+}
+
+// TestBuild_UnknownSignals exercises each CX-side unknown code
+// individually so a regression that mis-classifies one of them shows
+// up as a specific failure rather than a status-count drift.
+func TestBuild_UnknownSignals(t *testing.T) {
+	// A clean MRMO record so we can isolate CX-side signals without
+	// picking up MRMO warnings or blockers.
+	cleanMRMO := func(terraformType string) model.MRMOResource {
+		return model.MRMOResource{
+			TerraformType:          terraformType,
+			HandlerRegistered:      true,
+			ReconciliationEligible: true,
+			IntegrationTestStatus:  "covered",
+			Topics:                 []model.TopicEntry{{Topic: "T", Handler: "H"}},
+		}
+	}
+
+	tests := []struct {
+		name         string
+		resource     model.ProviderResource
+		wantCode     string
+		wantStatus   string
+		wantWarnCode string // optional, empty means no warning expected
+	}{
+		{
+			name: "unresolved RefAttr fires PROVIDER_REFATTR_UNRESOLVED",
+			resource: model.ProviderResource{
+				TerraformType:     "genesyscloud_bad_ref",
+				HasResource:       true,
+				HasExporter:       true,
+				BlockHashObserved: true,
+				RefAttrs: []model.RefAttr{
+					{Attribute: "queue_id", RefType: ""},
+				},
+			},
+			wantCode:   "PROVIDER_REFATTR_UNRESOLVED",
+			wantStatus: "unknown",
+		},
+		{
+			name: "unresolved EncodedRefAttr fires PROVIDER_ENCODED_REFATTR_UNRESOLVED",
+			resource: model.ProviderResource{
+				TerraformType:     "genesyscloud_bad_encoded",
+				HasResource:       true,
+				HasExporter:       true,
+				BlockHashObserved: true,
+				EncodedRefAttrs: []model.EncodedRefAttr{
+					{ContainerAttribute: "config.properties", NestedAttribute: "userId", RefType: ""},
+				},
+			},
+			wantCode:   "PROVIDER_ENCODED_REFATTR_UNRESOLVED",
+			wantStatus: "unknown",
+		},
+		{
+			name: "no BlockHash on non-singleton fires PROVIDER_BLOCK_HASH_UNKNOWN",
+			resource: model.ProviderResource{
+				TerraformType: "genesyscloud_no_hash",
+				HasResource:   true,
+				HasExporter:   true,
+			},
+			wantCode:   "PROVIDER_BLOCK_HASH_UNKNOWN",
+			wantStatus: "unknown",
+		},
+		{
+			name: "no BlockHash on singleton is EXPECTED and does not fire",
+			resource: model.ProviderResource{
+				TerraformType: "genesyscloud_ok_singleton",
+				HasResource:   true,
+				HasExporter:   true,
+				IsSingleton:   true,
+				ExportID:      "genesyscloud_ok_singleton",
+			},
+			wantCode:   "",
+			wantStatus: "ready",
+		},
+		{
+			name: "MRMO reconciliation-ineligible fires MRMO_RECONCILIATION_NOT_ELIGIBLE",
+			resource: model.ProviderResource{
+				TerraformType:     "genesyscloud_not_reconciled",
+				HasResource:       true,
+				HasExporter:       true,
+				BlockHashObserved: true,
+			},
+			wantWarnCode: "MRMO_RECONCILIATION_NOT_ELIGIBLE",
+			wantStatus:   "warning",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			mrmo := cleanMRMO(tc.resource.TerraformType)
+			if tc.wantWarnCode == "MRMO_RECONCILIATION_NOT_ELIGIBLE" {
+				mrmo.ReconciliationEligible = false
+			}
+			report := Build(
+				model.ProviderManifest{Resources: []model.ProviderResource{tc.resource}},
+				model.MRMOManifest{Resources: []model.MRMOResource{mrmo}},
+			)
+			if len(report.Resources) != 1 {
+				t.Fatalf("resource count = %d, want 1", len(report.Resources))
+			}
+			got := report.Resources[0]
+			if got.Status != tc.wantStatus {
+				t.Errorf("Status = %q, want %q; issues = %#v", got.Status, tc.wantStatus, got.Issues)
+			}
+			codes := issueCodes(got)
+			if tc.wantCode != "" && !containsCode(codes, tc.wantCode) {
+				t.Errorf("issue codes = %v, want to contain %q", codes, tc.wantCode)
+			}
+			if tc.wantWarnCode != "" && !containsCode(codes, tc.wantWarnCode) {
+				t.Errorf("issue codes = %v, want to contain %q", codes, tc.wantWarnCode)
+			}
+		})
+	}
+}
+
+// TestHasStrictFailures locks in the --strict contract: blockers fail
+// strict, warnings and unknowns are report-only.
+func TestHasStrictFailures(t *testing.T) {
+	tests := []struct {
+		name string
+		summary Summary
+		want bool
+	}{
+		{"empty report is not a failure", Summary{}, false},
+		{"warnings only stay report-only", Summary{WarningCount: 5}, false},
+		{"unknowns only stay report-only", Summary{UnknownCount: 5}, false},
+		{"a single blocker fails strict", Summary{BlockedCount: 1}, true},
+		{"blockers alongside anything else still fail", Summary{ReadyCount: 3, WarningCount: 2, UnknownCount: 1, BlockedCount: 1}, true},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			report := CompatibilityReport{Summary: tc.summary}
+			if got := report.HasStrictFailures(); got != tc.want {
+				t.Errorf("HasStrictFailures() = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+

@@ -1,0 +1,75 @@
+{
+  "repoPath": "FIXTURE",
+  "resources": [
+    {
+      "resourceTypeRef": "architect-flow",
+      "terraformType": "genesyscloud_flow",
+      "domain": "architect",
+      "tier": 4,
+      "topics": [
+        {
+          "topic": "ArchitectObjectNotification",
+          "handler": "ArchitectFlowHandler",
+          "avroSchema": "com.inin.avro.notifications.architect.ArchitectFlowNotification",
+          "supportedTypes": [
+            "com.inin.avro.notifications.architect.ArchitectFlowNotification"
+          ],
+          "validationType": "field_match"
+        }
+      ],
+      "handlerFiles": [
+        "internal/handlers/architect_flow_handler.go"
+      ],
+      "handlerRegistered": true,
+      "reconciliationEligible": true,
+      "integrationTestStatus": "missing"
+    },
+    {
+      "resourceTypeRef": "auth-division",
+      "terraformType": "genesyscloud_auth_division",
+      "domain": "authorization",
+      "tier": 0,
+      "topics": [
+        {
+          "topic": "AuthorizationDivisionChange",
+          "handler": "AuthorizationDivisionChangeHandler",
+          "avroSchemaS3Path": "registry",
+          "supportedTypes": [
+            "com.inin.avro.event.authorization.DivisionChangedEvent"
+          ],
+          "validationType": "accept_all"
+        }
+      ],
+      "handlerFiles": [
+        "internal/handlers/authorization_division_change_handler.go"
+      ],
+      "handlerRegistered": true,
+      "reconciliationEligible": true,
+      "integrationTestStatus": "covered"
+    },
+    {
+      "resourceTypeRef": "routing-queue",
+      "terraformType": "genesyscloud_routing_queue",
+      "domain": "routing",
+      "tier": 4,
+      "topics": [
+        {
+          "topic": "AssignmentQueueConfigurationChange",
+          "handler": "AssignmentQueueConfigurationHandler",
+          "avroSchemaS3Path": "repository",
+          "supportedTypes": [
+            "com.inin.avro.event.assignment.QueueConfigurationChangedEvent"
+          ],
+          "validationType": "accept_all"
+        }
+      ],
+      "handlerFiles": [
+        "internal/handlers/assignment_queue_configuration_handler.go"
+      ],
+      "handlerRegistered": true,
+      "reconciliationEligible": true,
+      "integrationTestStatus": "covered"
+    }
+  ],
+  "topicCount": 3
+}

@@ -1,4 +1,4 @@
-.PHONY: build test fmt scan explain deps
+.PHONY: build test fmt scan explain deps roundtrip
 
 BINARY := compatibility-lab
 
@@ -19,3 +19,6 @@ explain:
 
 deps:
 	go run ./cmd/compatibility-lab dependency-closure routing-queue
+
+roundtrip:
+	go run ./cmd/compatibility-lab roundtrip --resource genesyscloud_routing_queue

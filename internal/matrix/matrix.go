@@ -1,6 +1,38 @@
+// Package matrix builds the compatibility report from the provider and MRMO
+// manifests. It also owns the JSON contract that downstream tooling (CI, PR
+// comments, dashboards) relies on.
+//
+// LAB-3 JSON contract (SchemaVersion "compatibility-lab/v1"):
+//
+//   - Field names: lowerCamelCase.
+//   - Slices that can legitimately be empty use `omitempty` so
+//     "no dependencies" and "no issues" produce a compact document
+//     rather than an empty array. The exception is `resources` on
+//     `CompatibilityReport`: it is always emitted (empty array when no
+//     resources are known) so consumers can distinguish "scanned but
+//     found nothing" from a malformed report.
+//   - Status vocabulary (resource + dependency edge):
+//     "ready" | "warning" | "unknown" | "blocked".
+//     Precedence for resource-level status: blocked > warning > unknown > ready.
+//   - Issue.Severity vocabulary: "blocker" | "warning" | "unknown".
+//   - Resource ordering: alphabetical by TerraformType. This makes the
+//     JSON output byte-stable across runs so golden tests (and diff-based
+//     CI checks) work.
+//   - Dependency ordering: as emitted by the provider scanner
+//     (RefAttrs first, sorted by attribute; then EncodedRefAttrs, sorted
+//     by container + nested attribute).
 package matrix
 
-import "compatibility-lab/internal/model"
+import (
+	"sort"
+
+	"compatibility-lab/internal/model"
+)
+
+// SchemaVersion is the compatibility-lab JSON contract version. Bump this
+// when a breaking change to any field name, type, or emitted vocabulary
+// lands. Additive fields with `omitempty` do not require a bump.
+const SchemaVersion = "compatibility-lab/v1"
 
 type CompatibilityReport struct {
 	SchemaVersion string              `json:"schemaVersion"`
@@ -20,6 +52,7 @@ type Summary struct {
 	MRMOResourceCount     int `json:"mrmoResourceCount"`
 	ReadyCount            int `json:"readyCount"`
 	WarningCount          int `json:"warningCount"`
+	UnknownCount          int `json:"unknownCount"`
 	BlockedCount          int `json:"blockedCount"`
 }
 
@@ -66,6 +99,20 @@ func Build(providerManifest model.ProviderManifest, mrmoManifest model.MRMOManif
 		resources = append(resources, resource)
 	}
 
+	// LAB-3: alphabetize by TerraformType so the JSON contract is stable
+	// across runs. Go map iteration is randomized, so without this the
+	// top-level `resources` array reshuffles on every invocation and
+	// downstream golden tests / diff-based CI checks flap.
+	sort.Slice(resources, func(i, j int) bool {
+		return resources[i].TerraformType < resources[j].TerraformType
+	})
+	if resources == nil {
+		// Emit `resources: []` rather than `resources: null` when the
+		// scanners returned nothing, so consumers can rely on the field
+		// being present.
+		resources = []ResourceReadiness{}
+	}
+
 	summary := Summary{
 		ProviderResourceCount: len(providerManifest.Resources),
 		MRMOResourceCount:     len(mrmoManifest.Resources),
@@ -76,13 +123,15 @@ func Build(providerManifest model.ProviderManifest, mrmoManifest model.MRMOManif
 			summary.ReadyCount++
 		case "warning":
 			summary.WarningCount++
+		case "unknown":
+			summary.UnknownCount++
 		case "blocked":
 			summary.BlockedCount++
 		}
 	}
 
 	return CompatibilityReport{
-		SchemaVersion: "compatibility-lab/v1",
+		SchemaVersion: SchemaVersion,
 		Summary:       summary,
 		Resources:     resources,
 		Inputs: CompatibilityInputs{
@@ -163,6 +212,48 @@ func buildResourceReadiness(
 			readiness.addWarning("MRMO_INTEGRATION_TEST_MISSING", "resource has no handler integration test coverage")
 		case "unknown":
 			readiness.addWarning("MRMO_INTEGRATION_TEST_UNKNOWN", "resource integration test coverage could not be determined")
+		}
+		// LAB-2: MRMO knows about the resource but has opted it out of
+		// reconciliation. That's not a build-breaker — the topic wiring
+		// still works — but operators should know the resource won't be
+		// reconciled if it drifts.
+		if !mrmoResource.ReconciliationEligible {
+			readiness.addWarning("MRMO_RECONCILIATION_NOT_ELIGIBLE", "resource is not marked reconciliation-eligible in MRMO")
+		}
+	}
+
+	// LAB-2: convert CX-scanner "explicit unknown" facts into resource-level
+	// unknown signals so operators see them alongside warnings and blockers
+	// instead of having to dig into the raw manifest.
+	if providerResource != nil && providerResource.HasExporter {
+		for _, ref := range providerResource.RefAttrs {
+			if ref.RefType == "" {
+				readiness.addUnknown(
+					"PROVIDER_REFATTR_UNRESOLVED",
+					"RefAttrs."+ref.Attribute+" could not be statically resolved to a Terraform type",
+				)
+			}
+		}
+		for _, ref := range providerResource.EncodedRefAttrs {
+			if ref.RefType == "" {
+				attr := ref.ContainerAttribute
+				if ref.NestedAttribute != "" {
+					attr += "." + ref.NestedAttribute
+				}
+				readiness.addUnknown(
+					"PROVIDER_ENCODED_REFATTR_UNRESOLVED",
+					"EncodedRefAttrs."+attr+" could not be statically resolved to a Terraform type",
+				)
+			}
+		}
+		// CX-6 handoff: no static QuickHashFields / ResourceMeta.BlockHash
+		// evidence and the resource is not a singleton (singletons don't
+		// need a stable per-instance hash — ExportID plays that role).
+		if !providerResource.BlockHashObserved && !providerResource.IsSingleton {
+			readiness.addUnknown(
+				"PROVIDER_BLOCK_HASH_UNKNOWN",
+				"no static QuickHashFields call or ResourceMeta.BlockHash assignment was found; hash stability cannot be confirmed",
+			)
 		}
 	}
 
@@ -251,6 +342,16 @@ func buildDependencyEdge(
 	return edge
 }
 
+// LAB-2 status precedence, from worst to best:
+//
+//	blocked > warning > unknown > ready
+//
+// The add* helpers only promote the resource's Status up this ladder; they
+// never demote it. This lets us stack signals in any order without
+// worrying about the caller sequence — a resource that picks up an
+// UNKNOWN and then a BLOCKER stays blocked, and a WARNING never
+// downgrades a BLOCKER.
+
 func (r *ResourceReadiness) addBlocker(code, message string) {
 	r.Status = "blocked"
 	r.Score = 0
@@ -273,6 +374,31 @@ func (r *ResourceReadiness) addWarning(code, message string) {
 		Code:     code,
 		Message:  message,
 	})
+}
+
+// addUnknown records a signal that we cannot definitively classify as
+// ready or broken (e.g. an unresolved RefAttr type, or a missing static
+// BlockHash observation). It only pulls Status up from "ready" to
+// "unknown"; existing warnings and blockers are preserved.
+func (r *ResourceReadiness) addUnknown(code, message string) {
+	if r.Status == "ready" {
+		r.Status = "unknown"
+		if r.Score > 60 {
+			r.Score = 60
+		}
+	}
+	r.Issues = append(r.Issues, model.Issue{
+		Severity: "unknown",
+		Code:     code,
+		Message:  message,
+	})
+}
+
+// HasStrictFailures reports whether the report contains anything that
+// should fail a --strict run. LAB-2 spec: blockers fail strict, warnings
+// and unknowns stay report-only.
+func (report CompatibilityReport) HasStrictFailures() bool {
+	return report.Summary.BlockedCount > 0
 }
 
 func mapProviderResources(resources []model.ProviderResource) map[string]model.ProviderResource {

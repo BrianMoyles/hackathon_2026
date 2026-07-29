@@ -126,32 +126,34 @@ Deliver an offline CLI that scans both repos, joins provider exporter metadata w
 
 ## Shared Board
 
-### LAB-1: Replace Sample Data With Real Scanner Output
+<!-- ### LAB-1: Replace Sample Data With Real Scanner Output
 
 - Owner: `Shared`
 - Priority: `P0`
 - Status: `Todo`
 - Files: `internal/scanner/mrmo/scanner.go`, `internal/scanner/provider/scanner.go`
 - Goal: Remove the hardcoded `routing-queue` sample once both scanners return real manifests.
-- Acceptance: `make scan` reports actual local repo data.
+- Acceptance: `make scan` reports actual local repo data. -->
 
 ### LAB-2: Improve Matrix Scoring
 
 - Owner: `Shared`
 - Priority: `P0`
-- Status: `Todo`
-- Files: `internal/matrix/matrix.go`
+- Status: `Done`
+- Files: `internal/matrix/matrix.go`, `internal/matrix/matrix_test.go`, `internal/report/report.go`, `cmd/compatibility-lab/main.go`
 - Goal: Convert provider and MRMO signals into `ready`, `warning`, `blocked`, or `unknown`.
 - Acceptance: Blockers fail `--strict`; warnings remain report-only.
+- Notes: Added a fourth resource status (`unknown`) plus a strict precedence `blocked > warning > unknown > ready` enforced by three `add*` helpers on `ResourceReadiness`. `addUnknown` only promotes Status up from `ready`, so signals can be stacked in any order without demoting a blocker. New CX-side signals: `PROVIDER_REFATTR_UNRESOLVED` and `PROVIDER_ENCODED_REFATTR_UNRESOLVED` fire when the scanner couldn't statically resolve a RefType — the same "unknown" edge classification we already use per-dependency. `PROVIDER_BLOCK_HASH_UNKNOWN` fires on any non-singleton exporter where CX-6 could not statically find a `util.QuickHashFields` call or `ResourceMeta.BlockHash` assignment (singletons are exempt because ExportID plays the stable-name role). New MRMO-side signal: `MRMO_RECONCILIATION_NOT_ELIGIBLE` (warning) when MRMO knows about the resource but has opted it out of reconciliation. `Summary` gained `UnknownCount` and the table output now prints a one-line summary tally. `matrix.CompatibilityReport.HasStrictFailures()` returns true iff `Summary.BlockedCount > 0`; the scan command grew a `--strict` flag that turns any blocked resource into a non-zero exit while warnings and unknowns stay report-only. Locked with three new matrix tests: `TestBuild_StatusPrecedence` (five-resource fixture asserting each tier + precedence + summary counts), `TestBuild_UnknownSignals` (per-code table-driven test that also proves singleton-without-BlockHash stays ready), and `TestHasStrictFailures` (table-driven contract test for the strict predicate). Verified on the live provider: `--strict` correctly exits non-zero with the current MRMO fixture; the summary shows `1 warning, 2 unknown, 149 blocked`, with `genesyscloud_flow` in warning (missing integration test) and `genesyscloud_auth_division` + `genesyscloud_routing_queue` in unknown (block-hash could not be statically observed) — exactly what CX-6 promised to surface loudly.
 
 ### LAB-3: JSON Report Contract
 
 - Owner: `Shared`
 - Priority: `P0`
-- Status: `Todo`
-- Files: `internal/model/model.go`, `internal/matrix/matrix.go`
+- Status: `Done`
+- Files: `internal/matrix/matrix.go`, `internal/matrix/determinism_test.go`, `internal/matrix/golden_test.go` (shared), `testdata/goldens/compatibility-report.json` (shared)
 - Goal: Finalize the compatibility report schema for CI and PR comments.
 - Acceptance: JSON output is stable enough for golden tests.
+- Notes: Added a package-level doc comment on `internal/matrix` that freezes the JSON contract in code: lowerCamelCase field names, `omitempty` conventions, the status vocabulary (`ready` / `warning` / `unknown` / `blocked`) plus its `blocked > warning > unknown > ready` precedence, and the `Issue.Severity` vocabulary (`blocker` / `warning` / `unknown`). Exposed the version as a `matrix.SchemaVersion` constant so downstream consumers can pin against a symbol instead of a hardcoded string. The determinism fix: `matrix.Build` now `sort.Slice`s the top-level `resources` array alphabetically by `TerraformType` and rewrites a nil slice to `[]` before returning, so the JSON always shows `"resources": []` rather than `"resources": null` on empty scans. Coverage is layered: the shared `TestCompatibilityReportGolden` (in `internal/matrix/golden_test.go`, using `testutil.AssertJSONGolden`) runs the full pipeline against the fixture provider + MRMO trees and compares the marshaled report byte-for-byte against `testdata/goldens/compatibility-report.json`, while `TestBuild_JSONIsDeterministic` in `internal/matrix/determinism_test.go` re-marshals the same synthetic manifest six times and asserts every run produces identical bytes, so map-order regressions surface separately from schema drift. When the schema legitimately changes, `go test ./... -update` refreshes every golden in one sweep. Verified end-to-end against the live provider: two consecutive `scan --format json` runs against `~/genesys_src/terraform-provider-genesyscloud` produce byte-identical outputs, and after merging main (LAB-1/5/8 landed alongside), regenerating the goldens picks up the new LAB-2 `unknown` status lines cleanly.
 
 ### LAB-4: Markdown Report Output
 
@@ -162,14 +164,14 @@ Deliver an offline CLI that scans both repos, joins provider exporter metadata w
 - Goal: Add markdown output grouped by blockers, warnings, and ready resources.
 - Acceptance: `scan --format markdown` produces PR-friendly output.
 
-### LAB-5: Golden Fixture Tests
+<!-- ### LAB-5: Golden Fixture Tests
 
 - Owner: `Shared`
 - Priority: `P1`
 - Status: `Todo`
 - Files: `testdata/fixtures/`, scanner tests, matrix tests
 - Goal: Add small fixture snapshots for MRMO and provider metadata.
-- Acceptance: `go test ./...` catches scanner and report regressions.
+- Acceptance: `go test ./...` catches scanner and report regressions. -->
 
 ### LAB-6: Demo Scenarios
 
@@ -189,14 +191,14 @@ Deliver an offline CLI that scans both repos, joins provider exporter metadata w
 - Goal: Compare provider metadata snapshots across git refs.
 - Acceptance: Removed exporter or changed `RefAttrs` on an MRMO-supported resource is flagged as high risk.
 
-### LAB-8: Roundtrip Prototype
+<!-- ### LAB-8: Roundtrip Prototype
 
 - Owner: `Shared`
 - Priority: `P2`
 - Status: `Todo`
 - Files: new `internal/roundtrip/`
 - Goal: Prototype mocked export/source-target drift comparison.
-- Acceptance: Roundtrip can compare two exported JSON fixtures and show normalized drift.
+- Acceptance: Roundtrip can compare two exported JSON fixtures and show normalized drift. -->
 
 ## Suggested First Pulls
 
@@ -208,6 +210,6 @@ Deliver an offline CLI that scans both repos, joins provider exporter metadata w
 
 - `cmd/compatibility-lab/main.go` exists with planned commands.
 - `internal/model` contains initial report structs.
-- `internal/scanner/mrmo` and `internal/scanner/provider` exist as implementation slots.
-- `internal/matrix` joins sample scanner output.
+- `internal/scanner/mrmo` and `internal/scanner/provider` emit real manifests from local repos.
+- `internal/matrix` joins scanner output into readiness statuses.
 - `internal/report` prints table, explain, and dependency output.
