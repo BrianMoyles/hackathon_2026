@@ -8,6 +8,7 @@ import (
 
 	"compatibility-lab/internal/matrix"
 	"compatibility-lab/internal/report"
+	"compatibility-lab/internal/roundtrip"
 	"compatibility-lab/internal/scanner/mrmo"
 	"compatibility-lab/internal/scanner/provider"
 )
@@ -32,7 +33,7 @@ func main() {
 	case "diff-provider-pr":
 		err = notImplemented("diff-provider-pr", "compare provider exporter metadata between two git refs")
 	case "roundtrip":
-		err = notImplemented("roundtrip", "export, apply or mock-replicate, re-export, and compare drift")
+		err = runRoundtrip(os.Args[2:])
 	case "help", "-h", "--help":
 		usage()
 	default:
@@ -115,6 +116,38 @@ func runDependencyClosure(args []string) error {
 	return report.WriteDependencies(os.Stdout, closure)
 }
 
+func runRoundtrip(args []string) error {
+	fs := flag.NewFlagSet("roundtrip", flag.ExitOnError)
+	source := fs.String("source", "testdata/fixtures/roundtrip/source.json", "source export JSON fixture")
+	target := fs.String("target", "testdata/fixtures/roundtrip/target.json", "target export JSON fixture")
+	resourceType := fs.String("resource", "", "optional Terraform resource type filter")
+	format := fs.String("format", "table", "output format: table or json")
+	mode := fs.String("mode", "mock", "roundtrip mode (only mock is implemented)")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	if *mode != "mock" {
+		return fmt.Errorf("unsupported roundtrip mode %q (only mock is implemented)", *mode)
+	}
+
+	driftReport, err := roundtrip.CompareFiles(*source, *target, *resourceType)
+	if err != nil {
+		return err
+	}
+
+	switch *format {
+	case "table":
+		fmt.Print(roundtrip.FormatTable(driftReport))
+		return nil
+	case "json":
+		encoder := json.NewEncoder(os.Stdout)
+		encoder.SetIndent("", "  ")
+		return encoder.Encode(driftReport)
+	default:
+		return fmt.Errorf("unsupported format %q", *format)
+	}
+}
+
 func writeReport(compatibilityReport matrix.CompatibilityReport, format string) error {
 	switch format {
 	case "table":
@@ -141,6 +174,6 @@ Usage:
   compatibility-lab explain <resourceTypeOrRef>
   compatibility-lab dependency-closure <resourceTypeOrRef>
   compatibility-lab diff-provider-pr
-  compatibility-lab roundtrip
+  compatibility-lab roundtrip [--mode mock] [--source path] [--target path] [--resource type] [--format table|json]
 `)
 }

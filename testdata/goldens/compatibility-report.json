@@ -1,0 +1,208 @@
+{
+  "schemaVersion": "compatibility-lab/v1",
+  "summary": {
+    "providerResourceCount": 5,
+    "mrmoResourceCount": 3,
+    "readyCount": 2,
+    "warningCount": 1,
+    "blockedCount": 2
+  },
+  "resources": [
+    {
+      "terraformType": "genesyscloud_auth_division",
+      "resourceTypeRef": "auth-division",
+      "status": "ready",
+      "score": 100,
+      "provider": {
+        "terraformType": "genesyscloud_auth_division",
+        "hasResource": true,
+        "hasDataSource": false,
+        "hasExporter": true,
+        "isSingleton": false,
+        "writesFiles": false,
+        "hasCustomResolvers": false,
+        "blockHashObserved": false
+      },
+      "mrmo": {
+        "resourceTypeRef": "auth-division",
+        "terraformType": "genesyscloud_auth_division",
+        "domain": "authorization",
+        "tier": 0,
+        "topics": [
+          {
+            "topic": "AuthorizationDivisionChange",
+            "handler": "AuthorizationDivisionChangeHandler",
+            "avroSchemaS3Path": "registry",
+            "supportedTypes": [
+              "com.inin.avro.event.authorization.DivisionChangedEvent"
+            ],
+            "validationType": "accept_all"
+          }
+        ],
+        "handlerFiles": [
+          "internal/handlers/authorization_division_change_handler.go"
+        ],
+        "handlerRegistered": true,
+        "reconciliationEligible": true,
+        "integrationTestStatus": "covered"
+      }
+    },
+    {
+      "terraformType": "genesyscloud_blocked_only",
+      "status": "blocked",
+      "score": 0,
+      "provider": {
+        "terraformType": "genesyscloud_blocked_only",
+        "hasResource": true,
+        "hasDataSource": false,
+        "hasExporter": true,
+        "isSingleton": false,
+        "writesFiles": false,
+        "hasCustomResolvers": false,
+        "blockHashObserved": false
+      },
+      "issues": [
+        {
+          "severity": "blocker",
+          "code": "MRMO_REGISTRY_MISSING",
+          "message": "resource is not registered as MRMO-supported"
+        }
+      ]
+    },
+    {
+      "terraformType": "genesyscloud_fake_dep",
+      "status": "blocked",
+      "score": 0,
+      "provider": {
+        "terraformType": "genesyscloud_fake_dep",
+        "hasResource": true,
+        "hasDataSource": false,
+        "hasExporter": false,
+        "isSingleton": false,
+        "writesFiles": false,
+        "hasCustomResolvers": false,
+        "blockHashObserved": false
+      },
+      "issues": [
+        {
+          "severity": "blocker",
+          "code": "PROVIDER_EXPORTER_MISSING",
+          "message": "resource does not have a provider exporter"
+        },
+        {
+          "severity": "blocker",
+          "code": "MRMO_REGISTRY_MISSING",
+          "message": "resource is not registered as MRMO-supported"
+        }
+      ]
+    },
+    {
+      "terraformType": "genesyscloud_flow",
+      "resourceTypeRef": "architect-flow",
+      "status": "warning",
+      "score": 70,
+      "provider": {
+        "terraformType": "genesyscloud_flow",
+        "hasResource": true,
+        "hasDataSource": false,
+        "hasExporter": true,
+        "isSingleton": false,
+        "thirdPartyRefAttrs": [
+          "filepath"
+        ],
+        "customFileDirectory": "flows",
+        "writesFiles": true,
+        "hasCustomResolvers": false,
+        "blockHashObserved": false
+      },
+      "mrmo": {
+        "resourceTypeRef": "architect-flow",
+        "terraformType": "genesyscloud_flow",
+        "domain": "architect",
+        "tier": 4,
+        "topics": [
+          {
+            "topic": "ArchitectObjectNotification",
+            "handler": "ArchitectFlowHandler",
+            "avroSchema": "com.inin.avro.notifications.architect.ArchitectFlowNotification",
+            "supportedTypes": [
+              "com.inin.avro.notifications.architect.ArchitectFlowNotification"
+            ],
+            "validationType": "field_match"
+          }
+        ],
+        "handlerFiles": [
+          "internal/handlers/architect_flow_handler.go"
+        ],
+        "handlerRegistered": true,
+        "reconciliationEligible": true,
+        "integrationTestStatus": "missing"
+      },
+      "issues": [
+        {
+          "severity": "warning",
+          "code": "MRMO_INTEGRATION_TEST_MISSING",
+          "message": "resource has no handler integration test coverage"
+        }
+      ]
+    },
+    {
+      "terraformType": "genesyscloud_routing_queue",
+      "resourceTypeRef": "routing-queue",
+      "status": "ready",
+      "score": 100,
+      "provider": {
+        "terraformType": "genesyscloud_routing_queue",
+        "hasResource": true,
+        "hasDataSource": true,
+        "hasExporter": true,
+        "isSingleton": false,
+        "refAttrs": [
+          {
+            "attribute": "division_id",
+            "refType": "genesyscloud_auth_division"
+          }
+        ],
+        "writesFiles": false,
+        "hasCustomResolvers": false,
+        "blockHashObserved": false
+      },
+      "mrmo": {
+        "resourceTypeRef": "routing-queue",
+        "terraformType": "genesyscloud_routing_queue",
+        "domain": "routing",
+        "tier": 4,
+        "topics": [
+          {
+            "topic": "AssignmentQueueConfigurationChange",
+            "handler": "AssignmentQueueConfigurationHandler",
+            "avroSchemaS3Path": "repository",
+            "supportedTypes": [
+              "com.inin.avro.event.assignment.QueueConfigurationChangedEvent"
+            ],
+            "validationType": "accept_all"
+          }
+        ],
+        "handlerFiles": [
+          "internal/handlers/assignment_queue_configuration_handler.go"
+        ],
+        "handlerRegistered": true,
+        "reconciliationEligible": true,
+        "integrationTestStatus": "covered"
+      },
+      "dependencies": [
+        {
+          "terraformType": "genesyscloud_auth_division",
+          "source": "RefAttrs.division_id",
+          "providerExportable": true,
+          "mrmoSupported": true,
+          "status": "ready"
+        }
+      ]
+    }
+  ],
+  "inputs": {
+    "providerRepo": "PROVIDER_FIXTURE",
+    "mrmoRepo": "MRMO_FIXTURE"
+  }
+}

@@ -1,0 +1,65 @@
+{
+  "repoPath": "FIXTURE",
+  "resources": [
+    {
+      "terraformType": "genesyscloud_auth_division",
+      "hasResource": true,
+      "hasDataSource": false,
+      "hasExporter": true,
+      "isSingleton": false,
+      "writesFiles": false,
+      "hasCustomResolvers": false,
+      "blockHashObserved": false
+    },
+    {
+      "terraformType": "genesyscloud_blocked_only",
+      "hasResource": true,
+      "hasDataSource": false,
+      "hasExporter": true,
+      "isSingleton": false,
+      "writesFiles": false,
+      "hasCustomResolvers": false,
+      "blockHashObserved": false
+    },
+    {
+      "terraformType": "genesyscloud_fake_dep",
+      "hasResource": true,
+      "hasDataSource": false,
+      "hasExporter": false,
+      "isSingleton": false,
+      "writesFiles": false,
+      "hasCustomResolvers": false,
+      "blockHashObserved": false
+    },
+    {
+      "terraformType": "genesyscloud_flow",
+      "hasResource": true,
+      "hasDataSource": false,
+      "hasExporter": true,
+      "isSingleton": false,
+      "thirdPartyRefAttrs": [
+        "filepath"
+      ],
+      "customFileDirectory": "flows",
+      "writesFiles": true,
+      "hasCustomResolvers": false,
+      "blockHashObserved": false
+    },
+    {
+      "terraformType": "genesyscloud_routing_queue",
+      "hasResource": true,
+      "hasDataSource": true,
+      "hasExporter": true,
+      "isSingleton": false,
+      "refAttrs": [
+        {
+          "attribute": "division_id",
+          "refType": "genesyscloud_auth_division"
+        }
+      ],
+      "writesFiles": false,
+      "hasCustomResolvers": false,
+      "blockHashObserved": false
+    }
+  ]
+}
