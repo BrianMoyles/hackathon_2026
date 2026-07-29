@@ -51,6 +51,7 @@ func runScan(args []string) error {
 	providerRepo := fs.String("provider-repo", defaultProviderRepo, "path to terraform-provider-genesyscloud")
 	mrmoRepo := fs.String("mrmo-repo", defaultMRMORepo, "path to mrmo-replicator")
 	format := fs.String("format", "table", "output format: table or json")
+	strict := fs.Bool("strict", false, "exit non-zero when any resource is blocked (warnings and unknowns stay report-only)")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -65,7 +66,18 @@ func runScan(args []string) error {
 	}
 
 	compatibilityReport := matrix.Build(providerManifest, mrmoManifest)
-	return writeReport(compatibilityReport, *format)
+	if err := writeReport(compatibilityReport, *format); err != nil {
+		return err
+	}
+
+	// LAB-2: --strict flips a green run into a red one when any resource is
+	// blocked. Warnings and unknowns still surface in the report but do not
+	// fail the exit code, so CI can be strict about blockers without
+	// getting drowned in noise from static-analysis "unknowns".
+	if *strict && compatibilityReport.HasStrictFailures() {
+		return fmt.Errorf("strict mode: %d blocked resource(s) found", compatibilityReport.Summary.BlockedCount)
+	}
+	return nil
 }
 
 func runExplain(args []string) error {
@@ -170,7 +182,7 @@ func usage() {
 	fmt.Print(`MRMO / CX as Code Compatibility Lab
 
 Usage:
-  compatibility-lab scan [--provider-repo path] [--mrmo-repo path] [--format table|json]
+  compatibility-lab scan [--provider-repo path] [--mrmo-repo path] [--format table|json] [--strict]
   compatibility-lab explain <resourceTypeOrRef>
   compatibility-lab dependency-closure <resourceTypeOrRef>
   compatibility-lab diff-provider-pr

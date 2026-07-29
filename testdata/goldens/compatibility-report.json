@@ -3,16 +3,17 @@
   "summary": {
     "providerResourceCount": 5,
     "mrmoResourceCount": 3,
-    "readyCount": 2,
+    "readyCount": 0,
     "warningCount": 1,
+    "unknownCount": 2,
     "blockedCount": 2
   },
   "resources": [
     {
       "terraformType": "genesyscloud_auth_division",
       "resourceTypeRef": "auth-division",
-      "status": "ready",
-      "score": 100,
+      "status": "unknown",
+      "score": 60,
       "provider": {
         "terraformType": "genesyscloud_auth_division",
         "hasResource": true,
@@ -45,7 +46,14 @@
         "handlerRegistered": true,
         "reconciliationEligible": true,
         "integrationTestStatus": "covered"
-      }
+      },
+      "issues": [
+        {
+          "severity": "unknown",
+          "code": "PROVIDER_BLOCK_HASH_UNKNOWN",
+          "message": "no static QuickHashFields call or ResourceMeta.BlockHash assignment was found; hash stability cannot be confirmed"
+        }
+      ]
     },
     {
       "terraformType": "genesyscloud_blocked_only",
@@ -66,6 +74,11 @@
           "severity": "blocker",
           "code": "MRMO_REGISTRY_MISSING",
           "message": "resource is not registered as MRMO-supported"
+        },
+        {
+          "severity": "unknown",
+          "code": "PROVIDER_BLOCK_HASH_UNKNOWN",
+          "message": "no static QuickHashFields call or ResourceMeta.BlockHash assignment was found; hash stability cannot be confirmed"
         }
       ]
     },
@@ -143,14 +156,19 @@
           "severity": "warning",
           "code": "MRMO_INTEGRATION_TEST_MISSING",
           "message": "resource has no handler integration test coverage"
+        },
+        {
+          "severity": "unknown",
+          "code": "PROVIDER_BLOCK_HASH_UNKNOWN",
+          "message": "no static QuickHashFields call or ResourceMeta.BlockHash assignment was found; hash stability cannot be confirmed"
         }
       ]
     },
     {
       "terraformType": "genesyscloud_routing_queue",
       "resourceTypeRef": "routing-queue",
-      "status": "ready",
-      "score": 100,
+      "status": "unknown",
+      "score": 60,
       "provider": {
         "terraformType": "genesyscloud_routing_queue",
         "hasResource": true,
@@ -197,6 +215,13 @@
           "providerExportable": true,
           "mrmoSupported": true,
           "status": "ready"
+        }
+      ],
+      "issues": [
+        {
+          "severity": "unknown",
+          "code": "PROVIDER_BLOCK_HASH_UNKNOWN",
+          "message": "no static QuickHashFields call or ResourceMeta.BlockHash assignment was found; hash stability cannot be confirmed"
         }
       ]
     }
